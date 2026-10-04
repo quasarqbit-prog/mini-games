@@ -654,6 +654,23 @@ button {
 
 .result strong { display: block; margin-bottom: 4px; }
 
+.given-word {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(63, 143, 91, 0.16);
+  border: 1px solid rgba(63, 143, 91, 0.35);
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.given-word strong {
+  font-family: Unbounded, Manrope, sans-serif;
+  letter-spacing: 0.12em;
+}
+
+.mobile-given { display: none; }
+
 #toasts {
   position: fixed;
   top: 16px;
@@ -879,6 +896,9 @@ button {
     padding: 10px 12px;
     font-weight: 700;
   }
+
+  .mobile-given { display: block; }
+  .side .given-word { display: none; }
 
   .turn-confirm {
     display: flex;

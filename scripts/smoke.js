@@ -117,6 +117,9 @@ async function main() {
   const playing = await host.when((s) => s.phase === 'play', 'play');
   assert(playing.lengths.host === 5 && playing.lengths.guest === 4, 'lengths');
   assert(playing.turn === 'host' && !playing.answers, 'hidden and host turn');
+  assert(playing.yourWord === 'море', 'host sees the word they set');
+  const guestWord = await guest.when((s) => s.phase === 'play' && s.yourWord === 'stone', 'guest word');
+  assert(guestWord.yourWord === 'stone' && guestWord.answers == null, 'guest sees only their own word');
   host.emit('draft', { word: 'no' });
   const drafted = await guest.when((s) => s.drafts?.host === 'no', 'draft');
   assert(drafted.turn === 'host', 'draft during host turn');
@@ -139,13 +142,15 @@ async function main() {
   assert(won.answers.guest === 'море' && won.answers.host === 'stone', 'reveal');
 
   host.emit('again');
-  const again = await host.when((s) => s.phase === 'setup' && s.boards.host.length === 0, 'rematch');
-  assert(!again.winner, 'winner cleared');
+  const again = await host.when((s) => s.phase === 'lobby' && s.boards.host.length === 0, 'rematch');
+  assert(!again.winner && again.settings?.lengthMode === 'own', 'lobby keeps settings');
+  await guest.when((s) => s.phase === 'lobby', 'guest lobby');
 
-  const closed = new Promise((resolve) => host.once('closed', resolve));
+  const guestClosed = new Promise((resolve) => guest.once('closed', resolve));
   guest.emit('leave');
-  const message = await closed;
-  assert(/вышел/i.test(message.message), 'guest leave closes match');
+  const message = await guestClosed;
+  assert(/вышел/i.test(message.message), 'guest left lobby');
+  await host.when((s) => !s.guest, 'host sees empty seat');
 
   console.log('smoke ok', created.code);
   host.close();

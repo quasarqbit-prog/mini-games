@@ -510,15 +510,19 @@ function columnHtml(role) {
           <button class="btn wide" type="submit">Загадать</button>
         </form>`;
     } else if (mine) {
-      body = '<div class="wait-box"><p>Слово загадано. Ждём соперника.</p></div>';
+      const word = state.yourWord ? ` Ты загадал <strong>${escapeHtml(state.yourWord.toUpperCase())}</strong>.` : '';
+      body = `<div class="wait-box"><p>Слово загадано.${word} Ждём соперника.</p></div>`;
     } else {
       body = `<div class="wait-box"><p>${state.opponentSetWord ? 'Соперник уже загадал слово.' : 'Соперник загадывает слово…'}</p></div>`;
     }
   } else {
     body = boardHtml(role);
+    if (!mine && state.yourWord) {
+      body = `<div class="given-word">Ты загадал <strong>${escapeHtml(state.yourWord.toUpperCase())}</strong></div>${body}`;
+    }
     if (state.phase === 'done' && state.answers) {
       const secret = state.answers[role] || '';
-      body += `<div class="result"><strong>${mine ? 'Тебе загадали' : 'Сопернику загадали'}</strong>${escapeHtml(secret.toUpperCase())}</div>`;
+      body += `<div class="result"><strong>${mine ? 'Тебе загадали' : 'Ты загадал'}</strong>${escapeHtml(secret.toUpperCase())}</div>`;
     }
   }
 
@@ -559,7 +563,7 @@ function gameHtml() {
     ? '<button class="btn" type="button" data-act="again">Сыграть ещё</button>'
     : '';
   const wait = state.phase === 'done' && state.you !== 'host'
-    ? '<p class="note">Ждём, пока хост начнёт новый раунд</p>'
+    ? '<p class="note">Ждём, пока хост откроет лобби</p>'
     : '';
 
   const chatLabel = chatUnread ? `Чат <i class="badge">${chatUnread}</i>` : 'Чат';
@@ -572,6 +576,9 @@ function gameHtml() {
   const clock = state.phase === 'play' && state.settings?.timerOn && state.deadline
     ? `<div class="clock" data-deadline="${state.deadline}">${formatLeft(state.deadline)}</div>`
     : '';
+  const given = state.yourWord && (state.phase === 'play' || state.phase === 'done')
+    ? `<div class="given-word mobile-given">Ты загадал сопернику <strong>${escapeHtml(state.yourWord.toUpperCase())}</strong></div>`
+    : '';
 
   return `
     <section class="game-screen">
@@ -581,6 +588,7 @@ function gameHtml() {
         <button type="button" class="${mobilePane === 'chat' ? 'on' : ''}" data-act="pane" data-pane="chat">${chatLabel}</button>
       </div>
       ${chatNote}
+      ${given}
       <div class="game-top">
         <div class="pill">
           <span>Код</span>
@@ -629,6 +637,7 @@ function viewKey(snapshot) {
     lengths: snapshot.lengths,
     script: snapshot.script,
     answers: snapshot.answers,
+    yourWord: snapshot.yourWord,
     settings: snapshot.settings,
     fixedLength: snapshot.fixedLength,
     deadline: snapshot.deadline,

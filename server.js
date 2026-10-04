@@ -299,6 +299,7 @@ function publicView(room, token) {
     deadline: room.deadline,
     turn: room.turn,
     winner: room.winner,
+    yourWord: you && room.submitted[you] ? (room.target[otherRole(you)] || '') : '',
     answers: room.phase === 'done'
       ? { host: room.target.host, guest: room.target.guest }
       : null,
@@ -335,8 +336,8 @@ function closeRoom(room, message) {
   rooms.delete(room.code);
 }
 
-function resetMatch(room) {
-  room.phase = 'setup';
+function returnToLobby(room) {
+  room.phase = 'lobby';
   room.target = { host: null, guest: null };
   room.submitted = { host: false, guest: false };
   room.boards = { host: [], guest: [] };
@@ -344,7 +345,7 @@ function resetMatch(room) {
   room.fixedLength = null;
   room.deadline = null;
   room.winner = null;
-  rollFirst(room);
+  room.turn = 'host';
 }
 
 io.use((socket, next) => {
@@ -538,9 +539,8 @@ io.on('connection', (socket) => {
     if (!room) return fail(socket, 'Комната не найдена');
     if (roleOf(room, socket.data.token) !== 'host') return fail(socket, 'Новый раунд запускает хост');
     if (room.phase !== 'done') return fail(socket, 'Раунд ещё не закончен');
-    if (!room.guest?.connected) return fail(socket, 'Друг не в комнате');
-    resetMatch(room);
-    pushChat(room, 'system', 'Новый раунд. Снова загадайте слова.');
+    returnToLobby(room);
+    pushChat(room, 'system', 'Хост открыл лобби. Можно поменять правила и начать заново.');
     broadcast(room);
   });
 
