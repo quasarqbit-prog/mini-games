@@ -152,7 +152,66 @@ async function main() {
   assert(/вышел/i.test(message.message), 'guest left lobby');
   await host.when((s) => !s.guest, 'host sees empty seat');
 
+  const cinemaHost = connect('cinema-host');
+  const cinemaGuest = connect('cinema-guest');
+  await Promise.all([
+    new Promise((resolve) => cinemaHost.on('connect', resolve)),
+    new Promise((resolve) => cinemaGuest.on('connect', resolve)),
+  ]);
+  cinemaHost.emit('create', { game: 'cinema' });
+  const theatre = await cinemaHost.when((s) => s.game === 'cinema' && s.youHost, 'cinema');
+  cinemaGuest.emit('join', { code: theatre.code });
+  const watching = await cinemaGuest.when((s) => s.game === 'cinema' && !s.youHost && s.members.length === 2, 'cinema guest');
+  assert(watching.phase === 'watch', 'no lobby');
+  cinemaHost.emit('cinema:video', { url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' });
+  const queued = await cinemaGuest.when((s) => s.video?.id === 'dQw4w9WgXcQ' && s.video.playing, 'video');
+  assert(queued.video.at === 0, 'starts together');
+  cinemaHost.emit('cinema:pause', { time: 0 });
+  await cinemaGuest.when((s) => s.video && !s.video.playing, 'pause');
+  cinemaHost.emit('cinema:seek', { time: 12.2 });
+  const sought = await cinemaGuest.when((s) => s.video && s.video.at >= 12, 'seek');
+  assert(sought.chat.some((msg) => /перемотал/.test(msg.text)), 'seek notice');
+  cinemaGuest.emit('cinema:seek', { time: 30 });
+  const deniedSeek = await new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(''), 800);
+    cinemaGuest.once('errorMsg', (payload) => {
+      clearTimeout(timer);
+      resolve(typeof payload === 'string' ? payload : payload.text);
+    });
+  });
+  assert(/только хост/.test(deniedSeek), `guest seek blocked: ${deniedSeek}`);
+  const guestId = theatreWaitId(watching);
+  cinemaHost.emit('cinema:host', { id: guestId });
+  const passed = await cinemaGuest.when((s) => s.youHost, 'host passed');
+  assert(passed.members.some((member) => member.you && member.host), 'guest is host');
+  cinemaGuest.emit('cinema:screen', { start: true });
+  const sharing = await cinemaHost.when((s) => s.screen && !s.video.id, 'screen');
+  assert(sharing.chat.some((msg) => /демонстрацию/.test(msg.text)), 'screen notice');
+  cinemaGuest.emit('chat', { text: '<b>привет</b>' });
+  const said = await cinemaHost.when((s) => s.chat.some((msg) => msg.text.includes('привет')), 'cinema chat');
+  assert(said.chat.some((msg) => msg.text === '<b>привет</b>' && msg.at), 'chat keeps text and time');
+  for (let i = 0; i < 9; i += 1) cinemaGuest.emit('chat', { text: `спам ${i}` });
+  const limited = await new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(''), 1000);
+    const onError = (payload) => {
+      const text = typeof payload === 'string' ? payload : payload.text;
+      if (/много|Подожди/.test(text || '')) {
+        clearTimeout(timer);
+        cinemaGuest.off('errorMsg', onError);
+        resolve(text);
+      }
+    };
+    cinemaGuest.on('errorMsg', onError);
+  });
+  assert(/много|Подожди/.test(limited), `spam limited: ${limited}`);
+  cinemaHost.close();
+  cinemaGuest.close();
+
   console.log('smoke ok', created.code);
+
+function theatreWaitId(snapshot) {
+  return snapshot.members.find((member) => member.you).id;
+}
   host.close();
   guest.close();
   stop(0);

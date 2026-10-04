@@ -162,6 +162,9 @@ function lengthProblem(room, word) {
 }
 
 function roleOf(room, token) {
+  if (room.game === 'cinema') {
+    return room.members?.some((member) => member.token === token) ? 'member' : null;
+  }
   if (room.host?.token === token) return 'host';
   if (room.guest?.token === token) return 'guest';
   return null;
@@ -180,19 +183,35 @@ function findByToken(token) {
 }
 
 function pushChat(room, from, text) {
-  room.chat.push({
-    id: room.chatSeq,
-    from,
-    name: from === 'system' ? '' : playerLabel(room, from),
-    text,
-    at: Date.now(),
-  });
+  if (room.game === 'cinema') {
+    const system = from === 'system';
+    const member = system ? null : room.members.find((item) => item.token === from);
+    room.chat.push({
+      id: room.chatSeq,
+      system,
+      token: system ? '' : from,
+      name: system ? '' : (member?.name || 'Зритель'),
+      text,
+      at: Date.now(),
+    });
+  } else {
+    room.chat.push({
+      id: room.chatSeq,
+      from,
+      name: from === 'system' ? '' : playerLabel(room, from),
+      text,
+      at: Date.now(),
+    });
+  }
   room.chatSeq += 1;
   if (room.chat.length > MAX_CHAT) room.chat.splice(0, room.chat.length - MAX_CHAT);
 }
 
 function cleanText(raw) {
-  return String(raw || '').replace(/[\u0000-\u001F]/g, '').trim().slice(0, 400);
+  return String(raw || '')
+    .replace(/[\u0000-\u001F\u007F-\u009F\u202A-\u202E\u2066-\u2069]/g, '')
+    .trim()
+    .slice(0, 400);
 }
 
 function cleanName(raw) {
@@ -264,6 +283,7 @@ function broadcastOnline() {
 }
 
 function publicView(room, token) {
+  if (room.game === 'cinema') return cinemaView(room, token);
   const you = roleOf(room, token);
   const player = (slot) => (slot ? {
     connected: Boolean(slot.connected),
@@ -322,6 +342,7 @@ function fail(socket, text, extra) {
 }
 
 function attach(socket, room) {
+  if (room.game === 'cinema') return attachCinema(socket, room);
   const role = roleOf(room, socket.data.token);
   if (!role) return;
   room[role].socketId = socket.id;
@@ -348,6 +369,257 @@ function returnToLobby(room) {
   room.turn = 'host';
 }
 
+const CINEMA_LIMIT = 12;
+const HOST_GRACE_MS = 20 * 1000;
+
+function emptyCinema(code) {
+  return {
+    code,
+    game: 'cinema',
+    phase: 'watch',
+    hostToken: '',
+    members: [],
+    chat: [],
+    chatSeq: 1,
+    chatTimes: new Map(),
+    screen: false,
+    video: { id: '', playing: false, at: 0, updatedAt: 0, pauseAt: null },
+  };
+}
+
+function cinemaMember(room, token) {
+  return room.members.find((member) => member.token === token) || null;
+}
+
+function cinemaName(member) {
+  return member?.name || 'Зритель';
+}
+
+function mediaNow(video, now = Date.now()) {
+  if (!video?.id) return 0;
+  if (!video.playing) return video.at;
+  const elapsed = Math.max(0, (now - video.updatedAt) / 1000);
+  const time = video.at + elapsed;
+  if (video.pauseAt != null) return Math.min(time, video.pauseAt);
+  return time;
+}
+
+function freezeVideo(video, at, now = Date.now()) {
+  video.playing = false;
+  video.at = Math.max(0, at);
+  video.pauseAt = null;
+  video.updatedAt = now;
+}
+
+function connectedCinema(room) {
+  return room.members.filter((member) => member.connected).sort((a, b) => a.joinedAt - b.joinedAt);
+}
+
+function passCinemaHost(room, next) {
+  room.members.forEach((member) => {
+    member.host = member === next;
+  });
+  room.hostToken = next?.token || '';
+}
+
+function endScreen(room, text) {
+  if (!room.screen) return;
+  room.screen = false;
+  pushChat(room, 'system', text || 'Демонстрация экрана закончилась.');
+  io.to(room.code).emit('cinema:screen-off');
+}
+
+function cinemaView(room, token) {
+  const you = cinemaMember(room, token);
+  return {
+    game: 'cinema',
+    code: room.code,
+    phase: 'watch',
+    youHost: Boolean(you?.host),
+    youId: you?.id || '',
+    serverNow: Date.now(),
+    screen: room.screen,
+    video: {
+      id: room.video.id,
+      playing: room.video.playing,
+      at: room.video.at,
+      updatedAt: room.video.updatedAt,
+      pauseAt: room.video.pauseAt,
+    },
+    members: room.members.map((member) => ({
+      id: member.id,
+      name: member.name || '',
+      avatar: member.avatar || '',
+      host: member.host,
+      connected: member.connected,
+      you: member.token === token,
+    })),
+    chat: room.chat.map((msg) => ({
+      id: msg.id,
+      system: Boolean(msg.system),
+      name: msg.name || '',
+      text: msg.text,
+      at: msg.at,
+      mine: Boolean(msg.token) && msg.token === token,
+    })),
+  };
+}
+
+function youtubeId(raw) {
+  const text = String(raw || '').trim();
+  const ok = (id) => /^[\w-]{11}$/.test(id || '');
+  if (ok(text)) return text;
+  try {
+    const url = new URL(text);
+    const host = url.hostname.replace(/^www\./, '').toLowerCase();
+    if (host === 'youtu.be') {
+      const id = url.pathname.split('/').filter(Boolean)[0];
+      return ok(id) ? id : '';
+    }
+    if (host === 'youtube.com' || host === 'm.youtube.com' || host === 'music.youtube.com' || host === 'youtube-nocookie.com') {
+      const fromQuery = url.searchParams.get('v');
+      if (ok(fromQuery)) return fromQuery;
+      const parts = url.pathname.split('/').filter(Boolean);
+      if (['embed', 'shorts', 'live', 'v'].includes(parts[0]) && ok(parts[1])) return parts[1];
+    }
+  } catch {
+    return '';
+  }
+  return '';
+}
+
+function fmtMedia(seconds) {
+  const whole = Math.max(0, Math.floor(Number(seconds) || 0));
+  const mins = Math.floor(whole / 60);
+  const secs = whole % 60;
+  return `${mins}:${String(secs).padStart(2, '0')}`;
+}
+
+function attachCinema(socket, room) {
+  const member = cinemaMember(room, socket.data.token);
+  if (!member) return;
+  member.socketId = socket.id;
+  member.connected = true;
+  member.disconnectedAt = 0;
+  applyProfile(member);
+  socket.join(room.code);
+  broadcast(room);
+}
+
+function createCinema(socket) {
+  const already = findByToken(socket.data.token);
+  if (already) {
+    attach(socket, already);
+    return;
+  }
+  if (rooms.size > 500) return fail(socket, 'Слишком много комнат, попробуй позже');
+  const room = emptyCinema(makeCode());
+  const member = {
+    token: socket.data.token,
+    id: crypto.randomBytes(4).toString('hex'),
+    socketId: socket.id,
+    name: '',
+    avatar: '',
+    host: true,
+    connected: true,
+    joinedAt: Date.now(),
+    disconnectedAt: 0,
+  };
+  applyProfile(member);
+  room.members.push(member);
+  room.hostToken = member.token;
+  rooms.set(room.code, room);
+  socket.join(room.code);
+  pushChat(room, 'system', `${cinemaName(member)} открыл кинотеатр.`);
+  broadcast(room);
+}
+
+function joinCinema(socket, room) {
+  const already = cinemaMember(room, socket.data.token);
+  if (already) {
+    attachCinema(socket, room);
+    return;
+  }
+  const elsewhere = findByToken(socket.data.token);
+  if (elsewhere && elsewhere.code !== room.code) {
+    return fail(socket, 'Ты уже в другой комнате. Сначала выйди из неё.');
+  }
+  if (room.members.length >= CINEMA_LIMIT) return fail(socket, 'В кинотеатре уже максимум зрителей');
+  const member = {
+    token: socket.data.token,
+    id: crypto.randomBytes(4).toString('hex'),
+    socketId: socket.id,
+    name: '',
+    avatar: '',
+    host: false,
+    connected: true,
+    joinedAt: Date.now(),
+    disconnectedAt: 0,
+  };
+  applyProfile(member);
+  room.members.push(member);
+  socket.join(room.code);
+  pushChat(room, 'system', `${cinemaName(member)} вошёл в кинотеатр.`);
+  broadcast(room);
+}
+
+function leaveCinema(socket, room) {
+  const member = cinemaMember(room, socket.data.token);
+  if (!member) {
+    socket.emit('closed', { message: 'Ты вышел' });
+    return;
+  }
+  const wasHost = member.host;
+  if (wasHost && room.screen) endScreen(room, 'Демонстрация остановилась: хост вышел.');
+  room.members = room.members.filter((item) => item.token !== member.token);
+  socket.leave(room.code);
+  socket.emit('closed', { message: 'Ты вышел из кинотеатра' });
+  const next = connectedCinema(room)[0];
+  if (!next) {
+    rooms.delete(room.code);
+    return;
+  }
+  if (wasHost) {
+    passCinemaHost(room, next);
+    pushChat(room, 'system', `${cinemaName(member)} вышел. Хост теперь ${cinemaName(next)}.`);
+  } else {
+    pushChat(room, 'system', `${cinemaName(member)} вышел.`);
+  }
+  broadcast(room);
+}
+
+function disconnectCinema(socket, room) {
+  const member = cinemaMember(room, socket.data.token);
+  if (!member || member.socketId !== socket.id) return;
+  member.connected = false;
+  member.disconnectedAt = Date.now();
+  if (member.host && room.screen) endScreen(room, 'Демонстрация прервалась: у хоста пропала связь.');
+  broadcast(room);
+}
+
+function cinemaChat(socket, room, text) {
+  const member = cinemaMember(room, socket.data.token);
+  if (!member) return;
+  const message = cleanText(text);
+  if (!message) return;
+  const now = Date.now();
+  const recent = (room.chatTimes.get(member.token) || []).filter((stamp) => now - stamp < 10000);
+  if (recent.length >= 8) return fail(socket, 'Слишком много сообщений. Подожди немного.');
+  if (recent.length && now - recent[recent.length - 1] < 500) return fail(socket, 'Подожди секунду перед следующим сообщением.');
+  recent.push(now);
+  room.chatTimes.set(member.token, recent);
+  pushChat(room, member.token, message);
+  broadcast(room);
+}
+
+function requireCinema(socket) {
+  const room = findByToken(socket.data.token);
+  if (!room || room.game !== 'cinema') return null;
+  const member = cinemaMember(room, socket.data.token);
+  if (!member) return null;
+  return { room, member };
+}
+
 io.use((socket, next) => {
   const incoming = String(socket.handshake.auth?.token || '').replace(/[^\w-]/g, '').slice(0, 80);
   socket.data.token = incoming || crypto.randomUUID();
@@ -362,6 +634,7 @@ io.on('connection', (socket) => {
   if (existing) attach(socket, existing);
 
   socket.on('create', ({ game } = {}) => {
+    if (game === 'cinema') return createCinema(socket);
     if (game !== 'wordle') return fail(socket, 'Такой игры пока нет');
     const already = findByToken(socket.data.token);
     if (already) {
@@ -382,6 +655,7 @@ io.on('connection', (socket) => {
     const normalized = String(code || '').trim().toUpperCase().replace(/\s+/g, '');
     const room = rooms.get(normalized);
     if (!room) return fail(socket, 'Комната не найдена');
+    if (room.game === 'cinema') return joinCinema(socket, room);
 
     const already = roleOf(room, socket.data.token);
     if (already) {
@@ -406,6 +680,7 @@ io.on('connection', (socket) => {
   socket.on('start', () => {
     const room = findByToken(socket.data.token);
     if (!room) return fail(socket, 'Комната не найдена');
+    if (room.game === 'cinema') return;
     if (roleOf(room, socket.data.token) !== 'host') return fail(socket, 'Начать игру может только хост');
     if (room.phase !== 'lobby') return fail(socket, 'Игра уже началась');
     if (!room.guest?.connected) return fail(socket, 'Сначала пусть друг введёт код комнаты');
@@ -423,6 +698,7 @@ io.on('connection', (socket) => {
   socket.on('setWord', ({ word } = {}) => {
     const room = findByToken(socket.data.token);
     if (!room) return fail(socket, 'Комната не найдена');
+    if (room.game === 'cinema') return;
     const role = roleOf(room, socket.data.token);
     if (room.phase !== 'setup') return fail(socket, 'Сейчас не время загадывать слово');
     if (room.submitted[role]) return fail(socket, 'Слово уже загадано');
@@ -449,6 +725,7 @@ io.on('connection', (socket) => {
   socket.on('guess', ({ word } = {}) => {
     const room = findByToken(socket.data.token);
     if (!room) return fail(socket, 'Комната не найдена');
+    if (room.game === 'cinema') return;
     const role = roleOf(room, socket.data.token);
     if (room.phase !== 'play') return fail(socket, 'Игра ещё не идёт');
     if (room.turn !== role) return fail(socket, 'Сейчас ход соперника');
@@ -483,6 +760,7 @@ io.on('connection', (socket) => {
   socket.on('settings', (raw) => {
     const room = findByToken(socket.data.token);
     if (!room) return fail(socket, 'Комната не найдена');
+    if (room.game === 'cinema') return;
     if (roleOf(room, socket.data.token) !== 'host') return fail(socket, 'Настройки меняет хост');
     if (room.phase !== 'lobby') return fail(socket, 'Настройки можно менять только в лобби');
     room.settings = sanitizeSettings(raw);
@@ -491,7 +769,7 @@ io.on('connection', (socket) => {
 
   socket.on('draft', ({ word } = {}) => {
     const room = findByToken(socket.data.token);
-    if (!room || room.phase !== 'play' || room.settings.hidden) return;
+    if (!room || room.game === 'cinema' || room.phase !== 'play' || room.settings.hidden) return;
     const role = roleOf(room, socket.data.token);
     if (room.turn !== role || !room.target[role]) return;
     const secret = room.target[role];
@@ -518,6 +796,14 @@ io.on('connection', (socket) => {
     broadcastOnline();
     const room = findByToken(socket.data.token);
     if (!room) return;
+    if (room.game === 'cinema') {
+      const member = cinemaMember(room, socket.data.token);
+      if (!member) return;
+      member.name = clean;
+      member.avatar = picture;
+      broadcast(room);
+      return;
+    }
     const role = roleOf(room, socket.data.token);
     room[role].name = clean;
     room[role].avatar = picture;
@@ -527,6 +813,7 @@ io.on('connection', (socket) => {
   socket.on('chat', ({ text } = {}) => {
     const room = findByToken(socket.data.token);
     if (!room) return fail(socket, 'Комната не найдена');
+    if (room.game === 'cinema') return cinemaChat(socket, room, text);
     const role = roleOf(room, socket.data.token);
     const message = cleanText(text);
     if (!message) return;
@@ -537,11 +824,143 @@ io.on('connection', (socket) => {
   socket.on('again', () => {
     const room = findByToken(socket.data.token);
     if (!room) return fail(socket, 'Комната не найдена');
+    if (room.game === 'cinema') return;
     if (roleOf(room, socket.data.token) !== 'host') return fail(socket, 'Новый раунд запускает хост');
     if (room.phase !== 'done') return fail(socket, 'Раунд ещё не закончен');
     returnToLobby(room);
     pushChat(room, 'system', 'Хост открыл лобби. Можно поменять правила и начать заново.');
     broadcast(room);
+  });
+
+  socket.on('cinema:video', ({ url } = {}) => {
+    const found = requireCinema(socket);
+    if (!found) return fail(socket, 'Комната не найдена');
+    const { room, member } = found;
+    if (!member.host) return fail(socket, 'Ссылку ставит хост');
+    const id = youtubeId(url);
+    if (!id) return fail(socket, 'Нужна ссылка на YouTube');
+    if (room.screen) endScreen(room, 'Демонстрация экрана закончилась.');
+    const now = Date.now();
+    room.video = { id, playing: true, at: 0, updatedAt: now, pauseAt: null };
+    pushChat(room, 'system', `${cinemaName(member)} включил видео.`);
+    broadcast(room);
+  });
+
+  socket.on('cinema:pause', ({ time } = {}) => {
+    const found = requireCinema(socket);
+    if (!found) return;
+    const { room, member } = found;
+    if (!room.video.id || room.screen) return;
+    const now = Date.now();
+    const shared = mediaNow(room.video, now);
+    const reported = Math.max(0, Number(time) || 0);
+    if (reported < shared - 1) {
+      freezeVideo(room.video, shared, now);
+      pushChat(room, 'system', `${cinemaName(member)} поставил на паузу.`);
+    } else {
+      const pauseAt = Math.max(reported, shared);
+      if (pauseAt - shared < 0.4) {
+        freezeVideo(room.video, pauseAt, now);
+        pushChat(room, 'system', `${cinemaName(member)} поставил на паузу на ${fmtMedia(pauseAt)}.`);
+      } else {
+        room.video.playing = true;
+        room.video.at = shared;
+        room.video.updatedAt = now;
+        room.video.pauseAt = pauseAt;
+        pushChat(room, 'system', `${cinemaName(member)} поставил паузу на ${fmtMedia(pauseAt)}. Кто отстаёт, досмотрит до этой секунды.`);
+      }
+    }
+    broadcast(room);
+  });
+
+  socket.on('cinema:play', () => {
+    const found = requireCinema(socket);
+    if (!found) return;
+    const { room, member } = found;
+    if (!room.video.id || room.screen) return;
+    const now = Date.now();
+    const at = mediaNow(room.video, now);
+    room.video.playing = true;
+    room.video.at = at;
+    room.video.pauseAt = null;
+    room.video.updatedAt = now;
+    pushChat(room, 'system', `${cinemaName(member)} продолжил просмотр.`);
+    broadcast(room);
+  });
+
+  socket.on('cinema:seek', ({ time } = {}) => {
+    const found = requireCinema(socket);
+    if (!found) return;
+    const { room, member } = found;
+    if (!member.host) return fail(socket, 'Перематывать может только хост');
+    if (!room.video.id || room.screen) return;
+    const at = Math.max(0, Number(time) || 0);
+    const now = Date.now();
+    room.video.at = at;
+    room.video.updatedAt = now;
+    room.video.pauseAt = null;
+    pushChat(room, 'system', `${cinemaName(member)} перемотал на ${fmtMedia(at)}.`);
+    broadcast(room);
+  });
+
+  socket.on('cinema:host', ({ id } = {}) => {
+    const found = requireCinema(socket);
+    if (!found) return fail(socket, 'Комната не найдена');
+    const { room, member } = found;
+    if (!member.host) return fail(socket, 'Передавать роль может только хост');
+    const next = room.members.find((item) => item.id === id && item.connected && !item.host);
+    if (!next) return fail(socket, 'Этого зрителя нет в комнате');
+    if (room.screen) endScreen(room, 'Демонстрация остановилась: хост сменился.');
+    passCinemaHost(room, next);
+    pushChat(room, 'system', `Хост теперь ${cinemaName(next)}.`);
+    broadcast(room);
+  });
+
+  socket.on('cinema:screen', ({ start } = {}) => {
+    const found = requireCinema(socket);
+    if (!found) return fail(socket, 'Комната не найдена');
+    const { room, member } = found;
+    if (!member.host) return fail(socket, 'Демонстрация доступна только хосту');
+    if (start) {
+      if (room.video.id) {
+        room.video = { id: '', playing: false, at: 0, updatedAt: Date.now(), pauseAt: null };
+      }
+      if (!room.screen) {
+        room.screen = true;
+        pushChat(room, 'system', `${cinemaName(member)} начал демонстрацию экрана.`);
+      }
+      broadcast(room);
+      return;
+    }
+    if (room.screen) endScreen(room, 'Демонстрация экрана закончилась.');
+    broadcast(room);
+  });
+
+  socket.on('cinema:watch', () => {
+    const found = requireCinema(socket);
+    if (!found || !found.room.screen || found.member.host) return;
+    const host = found.room.members.find((item) => item.host && item.connected);
+    if (!host?.socketId) return;
+    io.to(host.socketId).emit('cinema:viewer', { id: socket.id });
+  });
+
+  socket.on('cinema:signal', (payload = {}) => {
+    const found = requireCinema(socket);
+    if (!found) return;
+    const { room } = found;
+    let targetId = String(payload.to || '');
+    if (!targetId) {
+      const host = room.members.find((item) => item.host && item.connected);
+      targetId = host?.socketId || '';
+    }
+    const known = room.members.some((item) => item.socketId === targetId && item.connected);
+    if (!known || targetId === socket.id) return;
+    const description = payload.description && typeof payload.description.type === 'string'
+      ? { type: payload.description.type, sdp: String(payload.description.sdp || '').slice(0, 100000) }
+      : null;
+    const candidate = payload.candidate && typeof payload.candidate === 'object' ? payload.candidate : null;
+    if (!description && !candidate) return;
+    io.to(targetId).emit('cinema:signal', { from: socket.id, description, candidate });
   });
 
   socket.on('leave', () => {
@@ -550,6 +969,7 @@ io.on('connection', (socket) => {
       socket.emit('closed', { message: 'Ты вышел' });
       return;
     }
+    if (room.game === 'cinema') return leaveCinema(socket, room);
     const role = roleOf(room, socket.data.token);
     if (role === 'guest' && room.phase === 'lobby') {
       room.guest = null;
@@ -567,6 +987,7 @@ io.on('connection', (socket) => {
     broadcastOnline();
     const room = findByToken(socket.data.token);
     if (!room) return;
+    if (room.game === 'cinema') return disconnectCinema(socket, room);
     const role = roleOf(room, socket.data.token);
     if (!role || room[role].socketId !== socket.id) return;
     room[role].connected = false;
@@ -578,6 +999,23 @@ io.on('connection', (socket) => {
 setInterval(() => {
   const now = Date.now();
   for (const room of rooms.values()) {
+    if (room.game === 'cinema') {
+      const video = room.video;
+      if (video.playing && video.pauseAt != null && mediaNow(video, now) >= video.pauseAt - 0.05) {
+        freezeVideo(video, video.pauseAt, now);
+        broadcast(room);
+      }
+      const host = room.members.find((member) => member.host);
+      if (host && !host.connected && host.disconnectedAt && now - host.disconnectedAt > HOST_GRACE_MS) {
+        const next = connectedCinema(room)[0];
+        if (next) {
+          passCinemaHost(room, next);
+          pushChat(room, 'system', `${cinemaName(host)} не вернулся. Хост теперь ${cinemaName(next)}.`);
+          broadcast(room);
+        }
+      }
+      continue;
+    }
     if (room.phase === 'play' && room.deadline && now >= room.deadline) {
       const skipped = room.turn;
       room.turn = otherRole(skipped);
@@ -591,6 +1029,13 @@ setInterval(() => {
 setInterval(() => {
   const now = Date.now();
   for (const room of rooms.values()) {
+    if (room.game === 'cinema') {
+      room.members = room.members.filter((member) => member.connected || now - (member.disconnectedAt || now) < 10 * 60 * 1000);
+      const alive = room.members.some((member) => member.connected);
+      const stale = room.members.every((member) => !member.connected && now - (member.disconnectedAt || now) > 10 * 60 * 1000);
+      if (!room.members.length || (!alive && stale)) rooms.delete(room.code);
+      continue;
+    }
     const hostGone = room.host && !room.host.connected && now - (room.host.disconnectedAt || now) > 10 * 60 * 1000;
     const guestGone = room.guest && !room.guest.connected && now - (room.guest.disconnectedAt || now) > 10 * 60 * 1000;
     const empty = (!room.host || !room.host.connected) && (!room.guest || !room.guest.connected);

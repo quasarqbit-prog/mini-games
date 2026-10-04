@@ -290,7 +290,7 @@ function homeHtml() {
   }
   return `
     <section class="home">
-      <p class="lead">Открой игру и скинь код или ссылку другу. По ссылке он сразу попадёт в лобби.</p>
+      <p class="lead">Открой Wordle или кинотеатр и скинь ссылку другу. Он попадёт в ту же комнату.</p>
       <form class="join" data-act="join">
         <label for="room-code">Код комнаты</label>
         <input id="room-code" maxlength="8" autocomplete="off" placeholder="ABCDE" ${connected ? '' : 'disabled'}>
@@ -303,6 +303,12 @@ function homeHtml() {
           <h2>Wordle</h2>
           <p>Загадайте слово друг другу и угадывайте по очереди. Кто первый угадает — победил.</p>
           <span class="tag">2 игрока</span>
+        </button>
+        <button class="game-card" type="button" data-act="create" data-game="cinema" ${connected ? '' : 'disabled'}>
+          <div class="film-preview" aria-hidden="true"><i></i><i></i></div>
+          <h2>Кинотеатр</h2>
+          <p>Смотрите YouTube вместе: одно видео, один таймлайн и общий чат.</p>
+          <span class="tag">вместе</span>
         </button>
       </div>
       ${onlineHtml()}
@@ -612,6 +618,10 @@ function gameHtml() {
 }
 
 function render() {
+  if (state?.game === 'cinema') {
+    renderCinema();
+    return;
+  }
   captureForm();
   document.body.classList.toggle('in-game', Boolean(state && state.phase !== 'lobby'));
   renderHeader();
@@ -768,6 +778,14 @@ document.addEventListener('click', (event) => {
     renderModal();
   }
   if (act === 'submit-guess') submitGuess();
+  if (act === 'cinema-tab') {
+    cinemaTab = el.dataset.tab === 'people' ? 'people' : 'chat';
+    if (cinemaTab === 'chat') cinemaUnread = 0;
+    patchCinemaSide();
+  }
+  if (act === 'screen-start') startScreenShare();
+  if (act === 'screen-stop') stopScreenShare();
+  if (act === 'give-host') socket.emit('cinema:host', { id: el.dataset.id });
 });
 
 document.addEventListener('submit', (event) => {
@@ -792,6 +810,11 @@ document.addEventListener('submit', (event) => {
     chatDraft = '';
     input.value = '';
   }
+  if (act === 'cinema-url') {
+    const input = form.querySelector('input');
+    socket.emit('cinema:video', { url: input.value });
+    return;
+  }
   if (act === 'save-profile') {
     const name = form.querySelector('.profile-name').value.replace(/\s+/g, ' ').trim().slice(0, 20);
     profile = { name, avatar: profileDraft?.avatar || '' };
@@ -805,7 +828,22 @@ document.addEventListener('submit', (event) => {
   }
 });
 
+document.addEventListener('input', (event) => {
+  const target = event.target;
+  if (target?.classList?.contains('cinema-url')) cinemaUrlDraft = target.value;
+  if (target?.classList?.contains('cinema-volume')) {
+    const value = Number(target.value);
+    localStorage.setItem(CINEMA_VOL_KEY, String(value));
+    localStorage.setItem(CINEMA_MUTE_KEY, value === 0 ? '1' : '0');
+    applyCinemaVolume();
+  }
+});
+
 document.addEventListener('change', async (event) => {
+  if (event.target?.classList?.contains('cinema-quality')) {
+    localStorage.setItem(CINEMA_QUAL_KEY, event.target.value);
+    applyCinemaQuality();
+  }
   const setting = event.target.closest?.('[data-setting-num]');
   if (setting && state?.you === 'host' && state.phase === 'lobby') {
     socket.emit('settings', { ...state.settings, [setting.dataset.settingNum]: Number(setting.value) });
@@ -871,6 +909,10 @@ socket.on('online', (list) => {
 });
 
 socket.on('state', (next) => {
+  if (next?.game === 'cinema') {
+    handleCinemaState(next);
+    return;
+  }
   const prev = state;
   booting = false;
   popRole = null;
@@ -906,6 +948,8 @@ socket.on('state', (next) => {
 });
 
 socket.on('closed', ({ message }) => {
+  stopCinemaMedia();
+  cinemaMounted = '';
   state = null;
   draft = '';
   pendingPane = null;
@@ -939,3 +983,526 @@ document.addEventListener('pointerdown', () => {
   if (!audioCtx) audioCtx = new Ctx();
   if (audioCtx.state === 'suspended') audioCtx.resume();
 });
+
+const CINEMA_VOL_KEY = 'leisure-cinema-volume';
+const CINEMA_MUTE_KEY = 'leisure-cinema-muted';
+const CINEMA_QUAL_KEY = 'leisure-cinema-quality';
+const ICE = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+let cinemaTab = 'chat';
+let cinemaUnread = 0;
+let cinemaUrlDraft = '';
+let cinemaMounted = '';
+let cinemaClockOffset = 0;
+let ytPlayer = null;
+let ytReady = null;
+let ytCatching = false;
+let ytSawPlayback = false;
+let remoteAction = 0;
+let lastSample = 0;
+let screenStream = null;
+let watchPc = null;
+const hostPeers = new Map();
+
+function cinemaStructure(snapshot) {
+  return JSON.stringify({
+    code: snapshot.code,
+    videoId: snapshot.video?.id || '',
+    screen: Boolean(snapshot.screen),
+    youHost: Boolean(snapshot.youHost),
+  });
+}
+
+function savedVolume() {
+  const raw = localStorage.getItem(CINEMA_VOL_KEY);
+  if (raw == null || raw === '') return 80;
+  const value = Number(raw);
+  if (!Number.isFinite(value)) return 80;
+  return Math.min(100, Math.max(0, value));
+}
+
+function savedQuality() {
+  return localStorage.getItem(CINEMA_QUAL_KEY) || 'auto';
+}
+
+function mediaClock(video) {
+  if (!video?.id) return 0;
+  if (!video.playing) return video.at || 0;
+  const now = Date.now() + cinemaClockOffset;
+  const time = (video.at || 0) + Math.max(0, (now - video.updatedAt) / 1000);
+  if (video.pauseAt != null) return Math.min(time, video.pauseAt);
+  return time;
+}
+
+function chatStamp(at) {
+  const date = new Date(at);
+  return `${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+}
+
+function cinemaMessages() {
+  const lines = (state?.chat || []).map((msg) => {
+    if (msg.system) return `<div class="msg system">${escapeHtml(msg.text)}</div>`;
+    const who = msg.name || 'Зритель';
+    return `<div class="msg${msg.mine ? ' mine' : ''}"><b>${escapeHtml(who)} · ${chatStamp(msg.at)}</b>${escapeHtml(msg.text)}</div>`;
+  }).join('');
+  return lines || '<div class="msg system">Сообщений пока нет</div>';
+}
+
+function cinemaPeople() {
+  const rows = (state?.members || []).map((person) => `
+    <li class="viewer${person.connected ? '' : ' off'}">
+      ${avatarHtml(person, person.name || 'Зритель')}
+      <span>${escapeHtml(person.name || 'Без имени')}${person.you ? ' · это ты' : ''}</span>
+      ${person.host ? '<em>хост</em>' : ''}
+      ${state.youHost && !person.host && person.connected ? `<button type="button" class="btn ghost" data-act="give-host" data-id="${escapeHtml(person.id)}">Передать</button>` : ''}
+    </li>`).join('');
+  return rows || '<li class="note">Пока никого нет</li>';
+}
+
+function cinemaHtml() {
+  const host = state.youHost;
+  const volume = savedVolume();
+  const quality = savedQuality();
+  const badge = cinemaUnread && cinemaTab !== 'chat' ? `<i class="badge">${cinemaUnread}</i>` : '';
+  let stage = '';
+  if (state.screen) {
+    stage = `
+      <video class="screen-video" autoplay playsinline></video>
+      <p class="stage-caption">${host ? 'Ты показываешь экран' : 'Демонстрация экрана хоста'}</p>`;
+  } else if (state.video?.id) {
+    stage = '<div id="yt-player"></div><p class="stage-error" hidden></p>';
+  } else {
+    stage = `
+      <div class="source-box">
+        <p>${host ? 'Вставь ссылку на YouTube или начни демонстрацию экрана.' : 'Хост ещё не выбрал, что смотреть.'}</p>
+        ${host ? `<form data-act="cinema-url">
+          <input class="cinema-url" value="${escapeHtml(cinemaUrlDraft)}" placeholder="https://www.youtube.com/watch?v=..." autocomplete="off">
+          <button class="btn" type="submit">Смотреть вместе</button>
+        </form>` : ''}
+      </div>`;
+  }
+  const tools = state.screen || state.video?.id ? `
+    <div class="cinema-tools">
+      <label>Громкость <input class="cinema-volume" type="range" min="0" max="100" value="${volume}"></label>
+      ${state.video?.id && !state.screen ? `<label>Качество
+        <select class="cinema-quality">
+          ${[['auto', 'Авто'], ['small', '240p'], ['medium', '360p'], ['large', '480p'], ['hd720', '720p'], ['hd1080', '1080p']].map(([item, label]) => `<option value="${item}" ${item === quality ? 'selected' : ''}>${label}</option>`).join('')}
+        </select>
+      </label>` : ''}
+    </div>` : '';
+  const hostBar = host ? `
+    <div class="host-bar">
+      ${state.video?.id && !state.screen ? `<form data-act="cinema-url">
+        <input class="cinema-url" value="${escapeHtml(cinemaUrlDraft)}" placeholder="Другая ссылка YouTube" autocomplete="off">
+        <button class="btn" type="submit">Сменить</button>
+      </form>` : ''}
+      ${state.screen
+        ? '<button class="btn ghost" type="button" data-act="screen-stop">Остановить демонстрацию</button>'
+        : '<button class="btn ghost" type="button" data-act="screen-start">Демонстрация экрана</button>'}
+    </div>` : '';
+  return `
+    <section class="cinema">
+      <div class="stage">
+        <div class="stage-top">
+          <div class="pill">
+            <span>Код</span>
+            <strong>${escapeHtml(state.code)}</strong>
+            <button class="btn" type="button" data-act="copy-link">Ссылка</button>
+          </div>
+          <button class="btn ghost" type="button" data-act="leave">Выйти</button>
+        </div>
+        <div class="stage-frame">${stage}</div>
+        ${tools}
+        ${hostBar}
+      </div>
+      <aside class="cinema-side">
+        <div class="cinema-tabs">
+          <button type="button" class="${cinemaTab === 'chat' ? 'on' : ''}" data-act="cinema-tab" data-tab="chat">Чат ${badge}</button>
+          <button type="button" class="${cinemaTab === 'people' ? 'on' : ''}" data-act="cinema-tab" data-tab="people">Зрители</button>
+        </div>
+        <div class="cinema-chat" ${cinemaTab === 'chat' ? '' : 'hidden'}>
+          <div class="chat-log cinema-log">${cinemaMessages()}</div>
+          <form class="chat-form" data-act="send-chat">
+            <input class="chat-input" maxlength="400" placeholder="Сообщение" autocomplete="off">
+            <button type="submit">Отправить</button>
+          </form>
+        </div>
+        <ul class="cinema-people" ${cinemaTab === 'people' ? '' : 'hidden'}>${cinemaPeople()}</ul>
+      </aside>
+    </section>`;
+}
+
+function patchCinemaSide() {
+  const chat = document.querySelector('.cinema-log');
+  if (chat) {
+    const stick = chat.scrollHeight - chat.scrollTop - chat.clientHeight < 48;
+    chat.innerHTML = cinemaMessages();
+    if (stick) chat.scrollTop = chat.scrollHeight;
+  }
+  const people = document.querySelector('.cinema-people');
+  if (people) {
+    people.innerHTML = cinemaPeople();
+    people.hidden = cinemaTab !== 'people';
+  }
+  const chatPane = document.querySelector('.cinema-chat');
+  if (chatPane) chatPane.hidden = cinemaTab !== 'chat';
+  document.querySelectorAll('[data-act="cinema-tab"]').forEach((button) => {
+    const on = button.dataset.tab === cinemaTab;
+    button.classList.toggle('on', on);
+    if (button.dataset.tab === 'chat') {
+      const badge = cinemaUnread && cinemaTab !== 'chat' ? ` <i class="badge">${cinemaUnread}</i>` : '';
+      button.innerHTML = `Чат${badge}`;
+    }
+  });
+}
+
+function renderCinema() {
+  const key = cinemaStructure(state);
+  document.body.classList.add('in-game');
+  if (key !== cinemaMounted || !document.querySelector('.cinema')) {
+    cinemaMounted = key;
+    captureForm();
+    renderHeader();
+    view.innerHTML = cinemaHtml();
+    restoreForm();
+    const log = document.querySelector('.cinema-log');
+    if (log) log.scrollTop = log.scrollHeight;
+    mountCinemaStage();
+    return;
+  }
+  patchCinemaSide();
+}
+
+function handleCinemaState(next) {
+  const prev = state?.game === 'cinema' ? state : null;
+  booting = false;
+  inviteCode = '';
+  cinemaClockOffset = (next.serverNow || Date.now()) - Date.now();
+  if (prev && prev.code === next.code) {
+    const prevLast = prev.chat.at(-1)?.id || 0;
+    const fresh = next.chat.filter((msg) => msg.id > prevLast && !msg.system && !msg.mine);
+    if (fresh.length) {
+      playChatSound();
+      if (cinemaTab !== 'chat') cinemaUnread += fresh.length;
+    }
+  }
+  state = next;
+  renderCinema();
+  syncYouTube();
+  if (next.screen && !next.youHost) ensureWatching();
+  if (!next.screen) closeWatch();
+}
+
+function loadYouTube() {
+  if (window.YT?.Player) return Promise.resolve();
+  if (!ytReady) {
+    ytReady = new Promise((resolve) => {
+      const previous = window.onYouTubeIframeAPIReady;
+      window.onYouTubeIframeAPIReady = () => {
+        if (typeof previous === 'function') previous();
+        resolve();
+      };
+      const tag = document.createElement('script');
+      tag.src = 'https://www.youtube.com/iframe_api';
+      document.head.appendChild(tag);
+    });
+  }
+  return ytReady;
+}
+
+function mountCinemaStage() {
+  ytCatching = false;
+  ytSawPlayback = false;
+  if (state.screen) {
+    destroyYouTube();
+    applyCinemaVolume();
+    if (state.youHost && screenStream) attachLocalPreview();
+    return;
+  }
+  closeWatch();
+  if (!state.video?.id) {
+    destroyYouTube();
+    return;
+  }
+  const mount = document.getElementById('yt-player');
+  if (!mount) return;
+  loadYouTube().then(() => {
+    if (!state?.video?.id || state.screen || !document.getElementById('yt-player')) return;
+    destroyYouTube();
+    ytPlayer = new YT.Player('yt-player', {
+      videoId: state.video.id,
+      host: 'https://www.youtube.com',
+      playerVars: {
+        autoplay: 1,
+        rel: 0,
+        modestbranding: 1,
+        playsinline: 1,
+        origin: location.origin,
+      },
+      events: {
+        onReady: () => {
+          applyCinemaVolume();
+          applyCinemaQuality();
+          syncYouTube(true);
+        },
+        onStateChange: onYouTubeState,
+        onError: onYouTubeError,
+        onPlaybackQualityChange: (event) => {
+          if (!event?.data || event.data === 'unknown') return;
+          localStorage.setItem(CINEMA_QUAL_KEY, event.data);
+          const select = document.querySelector('.cinema-quality');
+          if (select) select.value = event.data;
+        },
+      },
+    });
+  }).catch(() => showStageError('Не удалось загрузить плеер YouTube.'));
+}
+
+function destroyYouTube() {
+  if (!ytPlayer) return;
+  try { ytPlayer.destroy(); } catch { /* already gone */ }
+  ytPlayer = null;
+}
+
+function showStageError(text) {
+  const error = document.querySelector('.stage-error');
+  if (!error) {
+    toast(text);
+    return;
+  }
+  error.hidden = false;
+  error.textContent = text;
+}
+
+function onYouTubeError(event) {
+  const messages = {
+    2: 'Не получилось открыть это видео.',
+    5: 'Плеер YouTube не смог воспроизвести ролик.',
+    100: 'Ролик недоступен. Его могли удалить или скрыть.',
+    101: 'Автор запретил встраивание этого ролика на другие сайты.',
+    150: 'Автор запретил встраивание этого ролика на другие сайты.',
+  };
+  showStageError(messages[event.data] || 'Это видео не удаётся показать.');
+}
+
+function withRemote(fn) {
+  remoteAction += 1;
+  try { fn(); } catch { /* player may be mid-load */ }
+  setTimeout(() => { remoteAction = Math.max(0, remoteAction - 1); }, 800);
+}
+
+function applyCinemaVolume() {
+  const volume = savedVolume();
+  const muted = volume === 0 || localStorage.getItem(CINEMA_MUTE_KEY) === '1';
+  if (ytPlayer?.setVolume) {
+    ytPlayer.setVolume(volume);
+    if (muted) ytPlayer.mute();
+    else ytPlayer.unMute();
+  }
+  const video = document.querySelector('.screen-video');
+  if (video) {
+    video.volume = volume / 100;
+    video.muted = muted;
+  }
+}
+
+function applyCinemaQuality() {
+  const quality = savedQuality();
+  if (!ytPlayer || quality === 'auto') return;
+  try {
+    ytPlayer.setPlaybackQuality(quality);
+  } catch { /* quality hint is best-effort */ }
+}
+
+function onYouTubeState(event) {
+  if (!state?.video?.id || state.screen) return;
+  if (event.data === YT.PlayerState.PLAYING) ytSawPlayback = true;
+  if (remoteAction || document.hidden) return;
+  const time = ytPlayer?.getCurrentTime?.() || 0;
+  if (event.data === YT.PlayerState.PAUSED) {
+    if (!ytSawPlayback) return;
+    if (state.video.playing || state.video.pauseAt != null) socket.emit('cinema:pause', { time });
+  } else if (event.data === YT.PlayerState.PLAYING) {
+    if (!state.video.playing) socket.emit('cinema:play', { time });
+  }
+}
+
+function syncYouTube(force) {
+  if (!ytPlayer?.getCurrentTime || !state?.video?.id || state.screen || !window.YT?.PlayerState) return;
+  const target = mediaClock(state.video);
+  const local = ytPlayer.getCurrentTime() || 0;
+  const playerState = ytPlayer.getPlayerState?.();
+  const pauseAt = state.video.pauseAt;
+  const playing = state.video.playing;
+  if (state.youHost && !remoteAction && Math.abs(local - lastSample) > 2.4 && Math.abs(local - target) > 2.4) {
+    lastSample = local;
+    socket.emit('cinema:seek', { time: local });
+    return;
+  }
+  if (!state.youHost && !remoteAction && Math.abs(local - lastSample) > 2.4 && Math.abs(local - target) > 1.5 && playerState !== YT.PlayerState.BUFFERING) {
+    lastSample = local;
+    withRemote(() => ytPlayer.seekTo(Math.max(0, target), true));
+    return;
+  }
+  lastSample = local;
+  if (pauseAt != null && local >= pauseAt - 0.25) {
+    ytCatching = false;
+    try { ytPlayer.setPlaybackRate(1); } catch { /* ignore */ }
+    if (playerState === YT.PlayerState.PLAYING) withRemote(() => ytPlayer.pauseVideo());
+    return;
+  }
+  if (!playing && pauseAt == null) {
+    ytCatching = false;
+    try { ytPlayer.setPlaybackRate(1); } catch { /* ignore */ }
+    if (Math.abs(local - state.video.at) > 1.2) withRemote(() => ytPlayer.seekTo(state.video.at, true));
+    if (playerState === YT.PlayerState.PLAYING) withRemote(() => ytPlayer.pauseVideo());
+    return;
+  }
+  const behind = target - local;
+  if (!ytCatching && behind >= 5) ytCatching = true;
+  if (ytCatching && behind <= 0.35) ytCatching = false;
+  try { ytPlayer.setPlaybackRate(ytCatching ? (behind >= 12 ? 2 : 1.5) : 1); } catch { /* ignore */ }
+  if (!state.youHost && behind < -1.5) {
+    withRemote(() => ytPlayer.seekTo(Math.max(0, target), true));
+    return;
+  }
+  if (force) {
+    withRemote(() => {
+      ytPlayer.seekTo(Math.max(0, target), true);
+      if (playing && pauseAt == null) ytPlayer.playVideo();
+    });
+    return;
+  }
+  const stalled = playerState !== YT.PlayerState.PLAYING && playerState !== YT.PlayerState.BUFFERING;
+  if (stalled && playing && pauseAt == null) withRemote(() => ytPlayer.playVideo());
+}
+
+function stopCinemaMedia() {
+  destroyYouTube();
+  closeHostPeers();
+  closeWatch();
+  if (screenStream) {
+    screenStream.getTracks().forEach((track) => track.stop());
+    screenStream = null;
+  }
+}
+
+async function startScreenShare() {
+  if (!state?.youHost) return;
+  if (!navigator.mediaDevices?.getDisplayMedia) {
+    toast('Этот браузер не умеет показывать экран');
+    return;
+  }
+  try {
+    screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+  } catch {
+    try {
+      screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      toast('Браузер не передал звук. Зрители увидят картинку без звука.');
+    } catch {
+      toast('Демонстрация отменена');
+      return;
+    }
+  }
+  const track = screenStream.getVideoTracks()[0];
+  if (track) track.addEventListener('ended', () => stopScreenShare());
+  socket.emit('cinema:screen', { start: true });
+}
+
+function stopScreenShare() {
+  if (screenStream) {
+    screenStream.getTracks().forEach((track) => track.stop());
+    screenStream = null;
+  }
+  closeHostPeers();
+  if (state?.screen) socket.emit('cinema:screen', { start: false });
+}
+
+function attachLocalPreview() {
+  const video = document.querySelector('.screen-video');
+  if (!video || !screenStream) return;
+  video.srcObject = screenStream;
+  video.muted = true;
+  video.play().catch(() => {});
+}
+
+function closeHostPeers() {
+  hostPeers.forEach((pc) => pc.close());
+  hostPeers.clear();
+}
+
+function closeWatch() {
+  if (watchPc) {
+    watchPc.close();
+    watchPc = null;
+  }
+  const video = document.querySelector('.screen-video');
+  if (video && !state?.youHost) video.srcObject = null;
+}
+
+function ensureWatching() {
+  if (watchPc || !state?.screen || state.youHost) return;
+  const video = document.querySelector('.screen-video');
+  if (!video) return;
+  watchPc = new RTCPeerConnection(ICE);
+  watchPc.ontrack = (event) => {
+    video.srcObject = event.streams[0];
+    applyCinemaVolume();
+    video.play().catch(() => toast('Нажми на экран, чтобы включить звук демонстрации'));
+  };
+  watchPc.onicecandidate = (event) => {
+    if (event.candidate) socket.emit('cinema:signal', { candidate: event.candidate });
+  };
+  socket.emit('cinema:watch');
+}
+
+async function hostOffer(viewerId) {
+  if (!screenStream || hostPeers.has(viewerId)) return;
+  const pc = new RTCPeerConnection(ICE);
+  hostPeers.set(viewerId, pc);
+  screenStream.getTracks().forEach((track) => pc.addTrack(track, screenStream));
+  pc.onicecandidate = (event) => {
+    if (event.candidate) socket.emit('cinema:signal', { to: viewerId, candidate: event.candidate });
+  };
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  socket.emit('cinema:signal', { to: viewerId, description: pc.localDescription });
+}
+
+socket.on('cinema:viewer', ({ id } = {}) => {
+  if (id) hostOffer(id).catch(() => toast('Не удалось подключить зрителя к демонстрации'));
+});
+
+socket.on('cinema:signal', async ({ from, description, candidate } = {}) => {
+  try {
+    if (state?.youHost) {
+      const pc = hostPeers.get(from);
+      if (!pc) return;
+      if (description) await pc.setRemoteDescription(description);
+      if (candidate) await pc.addIceCandidate(candidate);
+      return;
+    }
+    if (!watchPc) ensureWatching();
+    if (!watchPc) return;
+    if (description?.type === 'offer') {
+      await watchPc.setRemoteDescription(description);
+      const answer = await watchPc.createAnswer();
+      await watchPc.setLocalDescription(answer);
+      socket.emit('cinema:signal', { to: from, description: watchPc.localDescription });
+    }
+    if (candidate) await watchPc.addIceCandidate(candidate);
+  } catch { /* ignore late signaling */ }
+});
+
+socket.on('cinema:screen-off', () => {
+  closeHostPeers();
+  closeWatch();
+  if (screenStream) {
+    screenStream.getTracks().forEach((track) => track.stop());
+    screenStream = null;
+  }
+});
+
+setInterval(() => {
+  if (state?.game === 'cinema' && !state.screen) syncYouTube(false);
+}, 500);
