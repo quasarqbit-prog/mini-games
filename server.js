@@ -2,6 +2,7 @@ const express = require('express');
 const http = require('http');
 const path = require('path');
 const crypto = require('crypto');
+const { Readable } = require('stream');
 const { Server } = require('socket.io');
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -71,6 +72,7 @@ function emptyRoom(code) {
     winner: null,
     chat: [],
     chatSeq: 1,
+    chatTimes: new Map(),
     drafts: { host: '', guest: '' },
     settings: defaultSettings(),
     fixedLength: null,
@@ -182,7 +184,13 @@ function findByToken(token) {
   return null;
 }
 
-function pushChat(room, from, text) {
+function pushChat(room, from, text, extra = {}) {
+  const attachment = {
+    text: text || '',
+    reply: extra.reply || null,
+    image: extra.image || '',
+    sticker: extra.sticker || '',
+  };
   if (room.game === 'cinema') {
     const system = from === 'system';
     const member = system ? null : room.members.find((item) => item.token === from);
@@ -191,20 +199,68 @@ function pushChat(room, from, text) {
       system,
       token: system ? '' : from,
       name: system ? '' : (member?.name || 'Зритель'),
-      text,
       at: Date.now(),
+      ...attachment,
     });
   } else {
     room.chat.push({
       id: room.chatSeq,
       from,
       name: from === 'system' ? '' : playerLabel(room, from),
-      text,
       at: Date.now(),
+      ...attachment,
     });
   }
   room.chatSeq += 1;
   if (room.chat.length > MAX_CHAT) room.chat.splice(0, room.chat.length - MAX_CHAT);
+}
+
+function cleanImage(raw, limit) {
+  const value = String(raw || '');
+  if (!value) return '';
+  if (!/^data:image\/(png|jpeg|webp|gif);base64,[a-z0-9+/=]+$/i.test(value)) return '';
+  if (value.length > limit) return '';
+  return value;
+}
+
+function cleanReply(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const name = cleanName(raw.name) || 'Сообщение';
+  const text = cleanText(raw.text).slice(0, 140);
+  if (!text) return null;
+  return { name, text };
+}
+
+function allowChat(room, key, socket) {
+  const now = Date.now();
+  if (!room.chatTimes) room.chatTimes = new Map();
+  const recent = (room.chatTimes.get(key) || []).filter((stamp) => now - stamp < 10000);
+  if (recent.length >= 8) {
+    fail(socket, 'Слишком много сообщений. Подожди немного.');
+    return false;
+  }
+  if (recent.length && now - recent[recent.length - 1] < 500) {
+    fail(socket, 'Подожди секунду перед следующим сообщением.');
+    return false;
+  }
+  recent.push(now);
+  room.chatTimes.set(key, recent);
+  return true;
+}
+
+function chatPayload(raw) {
+  const source = raw && typeof raw === 'object' ? raw : { text: raw };
+  const text = cleanText(source.text);
+  const image = cleanImage(source.image, 180000);
+  const sticker = cleanImage(source.sticker, 100000);
+  return {
+    text,
+    image,
+    sticker,
+    reply: cleanReply(source.reply),
+    badImage: Boolean(source.image) && !image,
+    badSticker: Boolean(source.sticker) && !sticker,
+  };
 }
 
 function cleanText(raw) {
@@ -372,6 +428,23 @@ function returnToLobby(room) {
 const CINEMA_LIMIT = 12;
 const HOST_GRACE_MS = 20 * 1000;
 
+function blankVideo() {
+  return {
+    kind: '',
+    service: '',
+    id: '',
+    live: false,
+    clip: false,
+    upstream: '',
+    direct: '',
+    directCookie: '',
+    playing: false,
+    at: 0,
+    updatedAt: 0,
+    pauseAt: null,
+  };
+}
+
 function emptyCinema(code) {
   return {
     code,
@@ -383,7 +456,7 @@ function emptyCinema(code) {
     chatSeq: 1,
     chatTimes: new Map(),
     screen: false,
-    video: { id: '', playing: false, at: 0, updatedAt: 0, pauseAt: null },
+    video: blankVideo(),
   };
 }
 
@@ -440,7 +513,11 @@ function cinemaView(room, token) {
     serverNow: Date.now(),
     screen: room.screen,
     video: {
+      kind: room.video.kind || '',
+      service: room.video.service || '',
       id: room.video.id,
+      live: Boolean(room.video.live),
+      clip: Boolean(room.video.clip),
       playing: room.video.playing,
       at: room.video.at,
       updatedAt: room.video.updatedAt,
@@ -461,6 +538,9 @@ function cinemaView(room, token) {
       text: msg.text,
       at: msg.at,
       mine: Boolean(msg.token) && msg.token === token,
+      reply: msg.reply || null,
+      image: msg.image || '',
+      sticker: msg.sticker || '',
     })),
   };
 }
@@ -486,6 +566,98 @@ function youtubeId(raw) {
     return '';
   }
   return '';
+}
+
+const TWITCH_RESERVED = new Set(['videos', 'directory', 'settings', 'downloads', 'jobs', 'p', 'search', 'subscriptions', 'wallet', 'turbo', 'products', 'friends', 'inventory', 'prime', 'signup', 'login']);
+
+function parseTwitch(raw) {
+  let url;
+  try { url = new URL(raw); } catch { return null; }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+  const host = url.hostname.toLowerCase().replace(/^www\./, '').replace(/^m\./, '');
+  if (host === 'clips.twitch.tv') {
+    const slug = url.pathname.split('/').filter(Boolean)[0];
+    if (!slug || !/^[\w-]+$/.test(slug)) return null;
+    return { kind: 'twitch', service: 'twitch', id: slug, live: true, clip: true, upstream: '' };
+  }
+  if (host === 'player.twitch.tv') {
+    const channel = url.searchParams.get('channel') || '';
+    const video = (url.searchParams.get('video') || '').replace(/^v/, '');
+    if (/^\d+$/.test(video)) return { kind: 'twitch', service: 'twitch', id: video, live: false, clip: false, upstream: '' };
+    if (/^[a-zA-Z0-9_]{3,25}$/.test(channel)) return { kind: 'twitch', service: 'twitch', id: channel.toLowerCase(), live: true, clip: false, upstream: '' };
+    return null;
+  }
+  if (host !== 'twitch.tv') return null;
+  const parts = url.pathname.split('/').filter(Boolean);
+  if (parts[0] === 'videos' && /^\d+$/.test(parts[1] || '')) {
+    return { kind: 'twitch', service: 'twitch', id: parts[1], live: false, clip: false, upstream: '' };
+  }
+  if (parts[1] === 'clip' && parts[2] && /^[\w-]+$/.test(parts[2])) {
+    return { kind: 'twitch', service: 'twitch', id: parts[2], live: true, clip: true, upstream: '' };
+  }
+  const channel = (parts[0] || '').toLowerCase();
+  if (channel && !TWITCH_RESERVED.has(channel) && /^[a-z0-9_]{3,25}$/.test(channel)) {
+    return { kind: 'twitch', service: 'twitch', id: channel, live: true, clip: false, upstream: '' };
+  }
+  return null;
+}
+
+function parseDrive(raw) {
+  let url;
+  try { url = new URL(raw); } catch { return null; }
+  if (url.protocol !== 'https:') return null;
+  const host = url.hostname.toLowerCase().replace(/^www\./, '');
+  if (host !== 'drive.google.com' && host !== 'docs.google.com') return null;
+  const fromPath = url.pathname.match(/\/file\/d\/([a-zA-Z0-9_-]{10,})/);
+  const id = fromPath?.[1] || url.searchParams.get('id') || '';
+  if (!/^[a-zA-Z0-9_-]{10,}$/.test(id)) return null;
+  return {
+    kind: 'file',
+    service: 'drive',
+    id,
+    live: false,
+    clip: false,
+    upstream: `https://drive.google.com/uc?export=download&id=${encodeURIComponent(id)}`,
+  };
+}
+
+function parseDropbox(raw) {
+  let url;
+  try { url = new URL(raw); } catch { return null; }
+  if (url.protocol !== 'https:' || url.username || url.password) return null;
+  const host = url.hostname.toLowerCase().replace(/^www\./, '');
+  if (host !== 'dropbox.com' && host !== 'dl.dropboxusercontent.com') return null;
+  if (url.pathname.split('/').filter(Boolean).length < 2) return null;
+  if (host === 'dropbox.com') {
+    url.hostname = 'www.dropbox.com';
+    url.hash = '';
+    url.searchParams.set('dl', '1');
+  }
+  const upstream = url.toString();
+  return {
+    kind: 'file',
+    service: 'dropbox',
+    id: crypto.createHash('sha1').update(upstream).digest('hex').slice(0, 12),
+    live: false,
+    clip: false,
+    upstream,
+  };
+}
+
+function parseWatchUrl(raw) {
+  const text = String(raw || '').trim();
+  const youtube = youtubeId(text);
+  if (youtube) return { kind: 'youtube', service: 'youtube', id: youtube, live: false, clip: false, upstream: '' };
+  return parseTwitch(text) || parseDrive(text) || parseDropbox(text);
+}
+
+function watchLabel(parsed) {
+  if (parsed.service === 'twitch' && parsed.clip) return 'клип Twitch';
+  if (parsed.service === 'twitch' && parsed.live) return 'трансляцию Twitch';
+  if (parsed.service === 'twitch') return 'запись Twitch';
+  if (parsed.service === 'drive') return 'видео из Google Drive';
+  if (parsed.service === 'dropbox') return 'видео из Dropbox';
+  return 'видео';
 }
 
 function fmtMedia(seconds) {
@@ -597,18 +769,15 @@ function disconnectCinema(socket, room) {
   broadcast(room);
 }
 
-function cinemaChat(socket, room, text) {
+function cinemaChat(socket, room, raw) {
   const member = cinemaMember(room, socket.data.token);
   if (!member) return;
-  const message = cleanText(text);
-  if (!message) return;
-  const now = Date.now();
-  const recent = (room.chatTimes.get(member.token) || []).filter((stamp) => now - stamp < 10000);
-  if (recent.length >= 8) return fail(socket, 'Слишком много сообщений. Подожди немного.');
-  if (recent.length && now - recent[recent.length - 1] < 500) return fail(socket, 'Подожди секунду перед следующим сообщением.');
-  recent.push(now);
-  room.chatTimes.set(member.token, recent);
-  pushChat(room, member.token, message);
+  const payload = chatPayload(raw);
+  if (payload.badImage) return fail(socket, 'Фото слишком большое или не подходит');
+  if (payload.badSticker) return fail(socket, 'Стикер слишком большой или не подходит');
+  if (!payload.text && !payload.image && !payload.sticker) return;
+  if (!allowChat(room, member.token, socket)) return;
+  pushChat(room, member.token, payload.text, payload);
   broadcast(room);
 }
 
@@ -810,14 +979,17 @@ io.on('connection', (socket) => {
     broadcast(room);
   });
 
-  socket.on('chat', ({ text } = {}) => {
+  socket.on('chat', (raw) => {
     const room = findByToken(socket.data.token);
     if (!room) return fail(socket, 'Комната не найдена');
-    if (room.game === 'cinema') return cinemaChat(socket, room, text);
+    if (room.game === 'cinema') return cinemaChat(socket, room, raw);
     const role = roleOf(room, socket.data.token);
-    const message = cleanText(text);
-    if (!message) return;
-    pushChat(room, role, message);
+    const payload = chatPayload(raw);
+    if (payload.badImage) return fail(socket, 'Фото слишком большое или не подходит');
+    if (payload.badSticker) return fail(socket, 'Стикер слишком большой или не подходит');
+    if (!payload.text && !payload.image && !payload.sticker) return;
+    if (!allowChat(room, role, socket)) return;
+    pushChat(room, role, payload.text, payload);
     broadcast(room);
   });
 
@@ -837,12 +1009,22 @@ io.on('connection', (socket) => {
     if (!found) return fail(socket, 'Комната не найдена');
     const { room, member } = found;
     if (!member.host) return fail(socket, 'Ссылку ставит хост');
-    const id = youtubeId(url);
-    if (!id) return fail(socket, 'Нужна ссылка на YouTube');
+    const parsed = parseWatchUrl(url);
+    if (!parsed) return fail(socket, 'Нужна ссылка на YouTube, Twitch, Google Drive или Dropbox');
     if (room.screen) endScreen(room, 'Демонстрация экрана закончилась.');
     const now = Date.now();
-    room.video = { id, playing: true, at: 0, updatedAt: now, pauseAt: null };
-    pushChat(room, 'system', `${cinemaName(member)} включил видео.`);
+    room.video = {
+      ...blankVideo(),
+      kind: parsed.kind,
+      service: parsed.service,
+      id: parsed.id,
+      live: parsed.live,
+      clip: parsed.clip,
+      upstream: parsed.upstream,
+      playing: true,
+      updatedAt: now,
+    };
+    pushChat(room, 'system', `${cinemaName(member)} включил ${watchLabel(parsed)}.`);
     broadcast(room);
   });
 
@@ -850,7 +1032,7 @@ io.on('connection', (socket) => {
     const found = requireCinema(socket);
     if (!found) return;
     const { room, member } = found;
-    if (!room.video.id || room.screen) return;
+    if (!room.video.id || room.screen || room.video.live) return;
     const now = Date.now();
     const shared = mediaNow(room.video, now);
     const reported = Math.max(0, Number(time) || 0);
@@ -877,7 +1059,7 @@ io.on('connection', (socket) => {
     const found = requireCinema(socket);
     if (!found) return;
     const { room, member } = found;
-    if (!room.video.id || room.screen) return;
+    if (!room.video.id || room.screen || room.video.live) return;
     const now = Date.now();
     const at = mediaNow(room.video, now);
     room.video.playing = true;
@@ -893,7 +1075,7 @@ io.on('connection', (socket) => {
     if (!found) return;
     const { room, member } = found;
     if (!member.host) return fail(socket, 'Перематывать может только хост');
-    if (!room.video.id || room.screen) return;
+    if (!room.video.id || room.screen || room.video.live) return;
     const at = Math.max(0, Number(time) || 0);
     const now = Date.now();
     room.video.at = at;
@@ -922,9 +1104,7 @@ io.on('connection', (socket) => {
     const { room, member } = found;
     if (!member.host) return fail(socket, 'Демонстрация доступна только хосту');
     if (start) {
-      if (room.video.id) {
-        room.video = { id: '', playing: false, at: 0, updatedAt: Date.now(), pauseAt: null };
-      }
+      if (room.video.id) room.video = blankVideo();
       if (!room.screen) {
         room.screen = true;
         pushChat(room, 'system', `${cinemaName(member)} начал демонстрацию экрана.`);
@@ -1049,6 +1229,95 @@ setInterval(() => {
     }
   }
 }, 60 * 1000).unref();
+
+function cloudHeaders(req, cookie) {
+  const headers = { 'User-Agent': 'Mozilla/5.0' };
+  if (req.headers.range) headers.Range = String(req.headers.range);
+  if (cookie) headers.Cookie = cookie;
+  return headers;
+}
+
+function cookieHeader(response) {
+  const list = typeof response.headers.getSetCookie === 'function' ? response.headers.getSetCookie() : [];
+  return list.map((item) => item.split(';')[0]).filter(Boolean).join('; ');
+}
+
+function driveConfirmUrl(id, html) {
+  const action = html.match(/action="(https:\/\/drive\.usercontent\.google\.com\/download[^"]+)"/i);
+  if (action) return action[1].replace(/&amp;/g, '&');
+  const uuid = (html.match(/name="uuid"\s+value="([^"]+)"/i) || [])[1]
+    || (html.match(/[?&]uuid=([0-9a-f-]{8,})/i) || [])[1];
+  const confirm = (html.match(/name="confirm"\s+value="([^"]+)"/i) || [])[1]
+    || (html.match(/confirm=([0-9A-Za-z_-]+)/) || [])[1]
+    || 't';
+  const next = new URL('https://drive.usercontent.google.com/download');
+  next.searchParams.set('id', id);
+  next.searchParams.set('export', 'download');
+  next.searchParams.set('confirm', confirm);
+  if (uuid) next.searchParams.set('uuid', uuid);
+  return next.toString();
+}
+
+function pipeCloudResponse(response, res) {
+  res.status(response.status);
+  res.setHeader('Cache-Control', 'private, no-store');
+  for (const name of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
+    const value = response.headers.get(name);
+    if (value) res.setHeader(name, value);
+  }
+  if (!res.getHeader('accept-ranges')) res.setHeader('Accept-Ranges', 'bytes');
+  if (!response.body) {
+    res.end();
+    return;
+  }
+  Readable.fromWeb(response.body).pipe(res);
+}
+
+app.get('/media/:code', async (req, res) => {
+  const controller = new AbortController();
+  req.on('close', () => controller.abort());
+  try {
+    const code = String(req.params.code || '').toUpperCase();
+    const room = rooms.get(code);
+    const token = String(req.query.t || '');
+    if (!room || room.game !== 'cinema' || room.video?.kind !== 'file' || !room.video.upstream) {
+      res.status(404).end();
+      return;
+    }
+    if (!cinemaMember(room, token)) {
+      res.status(403).end();
+      return;
+    }
+    const video = room.video;
+    let upstream = video.direct || video.upstream;
+    let response = await fetch(upstream, {
+      headers: cloudHeaders(req, video.directCookie),
+      redirect: 'follow',
+      signal: controller.signal,
+    });
+    let type = response.headers.get('content-type') || '';
+    if (video.service === 'drive' && type.includes('text/html')) {
+      const html = await response.text();
+      const next = driveConfirmUrl(video.id, html);
+      video.direct = next;
+      video.directCookie = cookieHeader(response);
+      response = await fetch(next, {
+        headers: cloudHeaders(req, video.directCookie),
+        redirect: 'follow',
+        signal: controller.signal,
+      });
+      type = response.headers.get('content-type') || '';
+    }
+    if (type.includes('text/html') || !response.ok && response.status !== 206) {
+      if (!res.headersSent) res.status(404).end();
+      return;
+    }
+    pipeCloudResponse(response, res);
+  } catch (error) {
+    if (error?.name === 'AbortError') return;
+    if (!res.headersSent) res.status(502).end();
+  }
+});
 
 if (require.main === module) {
   server.listen(PORT, () => {

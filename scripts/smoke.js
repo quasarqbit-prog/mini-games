@@ -190,6 +190,26 @@ async function main() {
   cinemaGuest.emit('chat', { text: '<b>привет</b>' });
   const said = await cinemaHost.when((s) => s.chat.some((msg) => msg.text.includes('привет')), 'cinema chat');
   assert(said.chat.some((msg) => msg.text === '<b>привет</b>' && msg.at), 'chat keeps text and time');
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  cinemaGuest.emit('chat', { text: 'ответ', reply: { name: 'Богдан', text: 'цитата' } });
+  const replied = await cinemaHost.when((s) => s.chat.some((msg) => msg.reply && msg.reply.text === 'цитата' && msg.text === 'ответ'), 'reply');
+  assert(replied.chat.some((msg) => msg.reply && msg.reply.name === 'Богдан'), 'reply name');
+  cinemaGuest.emit('cinema:screen', { start: false });
+  await cinemaHost.when((s) => !s.screen, 'screen stopped');
+  cinemaGuest.emit('cinema:video', { url: 'https://www.twitch.tv/riotgames' });
+  await cinemaHost.when((s) => s.video?.kind === 'twitch' && s.video.live && s.video.id === 'riotgames', 'twitch');
+  cinemaGuest.emit('cinema:pause', { time: 4 });
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  cinemaGuest.emit('chat', { text: 'после паузы' });
+  const live = await cinemaHost.when((s) => s.chat.some((msg) => msg.text === 'после паузы'), 'after live pause');
+  assert(live.video.playing && live.video.live, 'live pause ignored');
+  cinemaGuest.emit('cinema:video', { url: 'https://www.twitch.tv/videos/1234567890' });
+  await cinemaHost.when((s) => s.video?.kind === 'twitch' && !s.video.live && s.video.id === '1234567890', 'twitch vod');
+  cinemaGuest.emit('cinema:video', { url: 'https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrSt/view' });
+  await cinemaHost.when((s) => s.video?.service === 'drive' && s.video.kind === 'file' && s.video.id === '1AbCdEfGhIjKlMnOpQrSt', 'drive');
+  cinemaGuest.emit('cinema:video', { url: 'https://www.dropbox.com/s/abc123def/clip.mp4?dl=0' });
+  const drop = await cinemaHost.when((s) => s.video?.service === 'dropbox' && s.video.kind === 'file', 'dropbox');
+  assert(drop.video.upstream == null, 'cloud url stays on the server');
   for (let i = 0; i < 9; i += 1) cinemaGuest.emit('chat', { text: `спам ${i}` });
   const limited = await new Promise((resolve) => {
     const timer = setTimeout(() => resolve(''), 1000);

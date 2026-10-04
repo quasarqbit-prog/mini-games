@@ -21,6 +21,22 @@ if (!token) token = makeToken();
 localStorage.setItem(TOKEN_KEY, token);
 
 const PROFILE_KEY = 'mg-profile';
+const STICKER_KEY = 'leisure-stickers';
+
+function loadStickers() {
+  try {
+    const data = JSON.parse(localStorage.getItem(STICKER_KEY) || '[]');
+    if (!Array.isArray(data)) return [];
+    return data.filter((item) => /^data:image\/(png|jpeg|webp|gif);base64,/i.test(item)).slice(-30);
+  } catch {
+    return [];
+  }
+}
+
+function saveStickers() {
+  stickers = stickers.slice(-30);
+  localStorage.setItem(STICKER_KEY, JSON.stringify(stickers));
+}
 
 function loadProfile() {
   try {
@@ -53,6 +69,14 @@ let chatNotice = '';
 let profile = loadProfile();
 let profileOpen = false;
 let profileDraft = null;
+let stickers = loadStickers();
+let replyDraft = null;
+let emojiOpen = false;
+let emojiQuery = '';
+let emojiCat = 0;
+let pickerTab = 'emoji';
+let stickerMenuId = '';
+let emojiPack = null;
 
 function toast(text) {
   const el = document.createElement('div');
@@ -219,25 +243,50 @@ function renderModal() {
         </div>
       </form>
       ${profileDraft.avatar ? '<button class="btn ghost wide" type="button" data-act="clear-avatar">Убрать аватарку</button>' : ''}
+      <div class="sticker-box">
+        <h3>Стикеры</h3>
+        <p class="note">Они появляются в кнопке эмодзи и отправляются в чат.</p>
+        <div class="sticker-grid">
+          ${stickers.map((src, index) => `
+            <span>
+              <img src="${escapeHtml(src)}" alt="">
+              <button type="button" data-act="sticker-delete" data-i="${index}" aria-label="Удалить стикер">×</button>
+            </span>`).join('')}
+        </div>
+        <label class="btn ghost wide">Добавить стикер
+          <input class="sticker-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+        </label>
+      </div>
     </div>`;
 }
 
-function resizeAvatar(file) {
+function readFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('file'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function fitImage(file, maxSize, type, quality, cover) {
   return new Promise((resolve, reject) => {
     const image = new Image();
     const url = URL.createObjectURL(file);
     image.onload = () => {
-      const size = 96;
+      const scale = cover
+        ? Math.max(maxSize / image.width, maxSize / image.height)
+        : Math.min(1, maxSize / Math.max(image.width, image.height));
+      const width = Math.max(1, Math.round(image.width * scale));
+      const height = Math.max(1, Math.round(image.height * scale));
       const canvas = document.createElement('canvas');
-      canvas.width = size;
-      canvas.height = size;
+      canvas.width = cover ? maxSize : width;
+      canvas.height = cover ? maxSize : height;
       const ctx = canvas.getContext('2d');
-      const scale = Math.max(size / image.width, size / image.height);
-      const w = image.width * scale;
-      const h = image.height * scale;
-      ctx.drawImage(image, (size - w) / 2, (size - h) / 2, w, h);
+      if (cover) ctx.drawImage(image, (maxSize - width) / 2, (maxSize - height) / 2, width, height);
+      else ctx.drawImage(image, 0, 0, width, height);
       URL.revokeObjectURL(url);
-      resolve(canvas.toDataURL('image/jpeg', 0.72));
+      resolve(canvas.toDataURL(type, quality));
     };
     image.onerror = () => {
       URL.revokeObjectURL(url);
@@ -247,23 +296,111 @@ function resizeAvatar(file) {
   });
 }
 
-function chatHtml(compact) {
-  const lines = (state?.chat || []).map((msg) => {
-    if (msg.from === 'system') {
-      return `<div class="msg system">${escapeHtml(msg.text)}</div>`;
-    }
-    const mine = msg.from === state.you;
-    const who = msg.name || displayName(msg.from);
-    const face = avatarHtml(state[msg.from] || { name: who }, who);
-    return `<div class="msg${mine ? ' mine' : ''}"><b class="person">${face}${escapeHtml(who)}</b>${escapeHtml(msg.text)}</div>`;
-  }).join('');
+function resizeAvatar(file) {
+  return fitImage(file, 96, 'image/jpeg', 0.72, true);
+}
+
+async function resizePhoto(file) {
+  let quality = 0.72;
+  let data = await fitImage(file, 960, 'image/jpeg', quality, false);
+  while (data.length > 180000 && quality > 0.4) {
+    quality -= 0.12;
+    data = await fitImage(file, 960, 'image/jpeg', quality, false);
+  }
+  return data;
+}
+
+async function resizeSticker(file) {
+  if (file.type === 'image/gif' && file.size <= 100000) return readFile(file);
+  const type = document.createElement('canvas').toDataURL('image/webp').startsWith('data:image/webp')
+    ? 'image/webp'
+    : 'image/png';
+  let quality = 0.82;
+  let data = await fitImage(file, 256, type, quality, false);
+  while (data.length > 100000 && quality > 0.4 && type === 'image/webp') {
+    quality -= 0.15;
+    data = await fitImage(file, 256, type, quality, false);
+  }
+  return data;
+}
+
+function isSystemMessage(msg) {
+  return Boolean(msg.system || msg.from === 'system');
+}
+
+function messageName(msg) {
+  if (msg.name) return msg.name;
+  if (msg.from && msg.from !== 'system') return displayName(msg.from);
+  return 'Зритель';
+}
+
+function messageMine(msg) {
+  if (state?.game === 'cinema') return Boolean(msg.mine);
+  return msg.from === state?.you;
+}
+
+function messageBody(msg) {
+  const parts = [];
+  if (msg.reply?.text) {
+    parts.push(`<span class="reply-quote"><span>${escapeHtml(msg.reply.name || '')}</span>${escapeHtml(msg.reply.text)}</span>`);
+  }
+  if (msg.text) parts.push(`<span class="msg-text">${escapeHtml(msg.text)}</span>`);
+  if (msg.image) parts.push(`<img class="chat-photo" alt="Фото" src="${escapeHtml(msg.image)}">`);
+  if (msg.sticker) {
+    const open = stickerMenuId === String(msg.id);
+    const owned = stickers.includes(msg.sticker);
+    parts.push(`<span class="sticker-wrap">
+      <button type="button" class="chat-sticker" data-act="sticker-menu" data-id="${escapeHtml(String(msg.id))}"><img alt="Стикер" src="${escapeHtml(msg.sticker)}"></button>
+      ${open ? (owned
+        ? '<span class="sticker-owned">Уже в стикерах</span>'
+        : `<button type="button" class="btn ghost" data-act="sticker-save" data-id="${escapeHtml(String(msg.id))}">В стикеры</button>`) : ''}
+    </span>`);
+  }
+  return parts.join('');
+}
+
+function messageHtml(msg) {
+  if (isSystemMessage(msg)) return `<div class="msg system">${escapeHtml(msg.text)}</div>`;
+  const who = messageName(msg);
+  const cinema = state?.game === 'cinema';
+  const head = cinema
+    ? `${escapeHtml(who)} · ${chatStamp(msg.at)}`
+    : `${avatarHtml(state?.[msg.from] || { name: who }, who)}${escapeHtml(who)}`;
+  return `<div class="msg${messageMine(msg) ? ' mine' : ''}" data-id="${escapeHtml(String(msg.id))}"><b${cinema ? '' : ' class="person"'}>${head}</b>${messageBody(msg)}</div>`;
+}
+
+function chatComposer() {
+  const reply = replyDraft ? `
+    <div class="reply-draft">
+      <span><b>${escapeHtml(replyDraft.name)}</b>${escapeHtml(replyDraft.text)}</span>
+      <button type="button" data-act="reply-cancel" aria-label="Отменить ответ">×</button>
+    </div>` : '';
   return `
-    <section class="chat-panel" style="${compact ? '' : ''}">
+    ${reply}
+    <div class="emoji-pop" ${emojiOpen ? '' : 'hidden'}>
+      <div class="emoji-tabs">
+        <button type="button" class="${pickerTab === 'emoji' ? 'on' : ''}" data-act="picker-tab" data-tab="emoji">Эмодзи</button>
+        <button type="button" class="${pickerTab === 'stickers' ? 'on' : ''}" data-act="picker-tab" data-tab="stickers">Стикеры</button>
+      </div>
+      <div class="emoji-body"></div>
+    </div>
+    <form class="chat-form" data-act="send-chat">
+      <button class="icon-btn" type="button" data-act="emoji-open" aria-label="Эмодзи">☺</button>
+      <button class="icon-btn" type="button" data-act="photo-open" aria-label="Прикрепить фото" title="Прикрепить фото">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M21 6h-3.2l-1.2-2H7.4L6.2 6H3a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h18a1 1 0 0 0 1-1V7a1 1 0 0 0-1-1zm-9 11a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z"/></svg>
+      </button>
+      <input class="photo-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+      <input class="chat-input" maxlength="400" placeholder="Сообщение" autocomplete="off">
+      <button type="submit">Отправить</button>
+    </form>`;
+}
+
+function chatHtml() {
+  const lines = (state?.chat || []).map((msg) => messageHtml(msg)).join('');
+  return `
+    <section class="chat-panel">
       <div class="chat-log">${lines || '<div class="msg system">Сообщений пока нет</div>'}</div>
-      <form class="chat-form" data-act="send-chat">
-        <input class="chat-input" maxlength="400" placeholder="Сообщение" autocomplete="off">
-        <button type="submit">Отправить</button>
-      </form>
+      ${chatComposer()}
     </section>`;
 }
 
@@ -305,9 +442,9 @@ function homeHtml() {
           <span class="tag">2 игрока</span>
         </button>
         <button class="game-card" type="button" data-act="create" data-game="cinema" ${connected ? '' : 'disabled'}>
-          <div class="film-preview" aria-hidden="true"><i></i><i></i></div>
+          <div class="film-preview" aria-hidden="true"><i class="seek back"></i><i class="pause"></i><i class="seek fwd"></i></div>
           <h2>Кинотеатр</h2>
-          <p>Смотрите YouTube вместе: одно видео, один таймлайн и общий чат.</p>
+          <p>Смотрите вместе: YouTube, Twitch, Google Drive и Dropbox.</p>
           <span class="tag">вместе</span>
         </button>
       </div>
@@ -627,6 +764,7 @@ function render() {
   renderHeader();
   view.innerHTML = state ? (state.phase === 'lobby' ? lobbyHtml() : gameHtml()) : homeHtml();
   restoreForm();
+  paintPicker();
 }
 
 function viewKey(snapshot) {
@@ -786,6 +924,41 @@ document.addEventListener('click', (event) => {
   if (act === 'screen-start') startScreenShare();
   if (act === 'screen-stop') stopScreenShare();
   if (act === 'give-host') socket.emit('cinema:host', { id: el.dataset.id });
+  if (act === 'emoji-open') {
+    emojiOpen = !emojiOpen;
+    if (emojiOpen) pickerTab = pickerTab || 'emoji';
+    paintPicker();
+  }
+  if (act === 'photo-open') document.querySelector('.photo-file')?.click();
+  if (act === 'reply-cancel') {
+    replyDraft = null;
+    paintReply();
+  }
+  if (act === 'picker-tab') {
+    pickerTab = el.dataset.tab === 'stickers' ? 'stickers' : 'emoji';
+    emojiOpen = true;
+    paintPicker();
+  }
+  if (act === 'emoji-cat') {
+    emojiCat = Number(el.dataset.cat) || 0;
+    emojiQuery = '';
+    const search = document.querySelector('.emoji-search');
+    if (search) search.value = '';
+    paintPicker();
+  }
+  if (act === 'emoji-insert') insertEmoji(el.dataset.char || el.textContent || '');
+  if (act === 'sticker-send') sendSticker(Number(el.dataset.i));
+  if (act === 'sticker-menu') {
+    stickerMenuId = stickerMenuId === el.dataset.id ? '' : el.dataset.id;
+    refreshChatLog();
+  }
+  if (act === 'sticker-save') saveChatSticker(el.dataset.id);
+  if (act === 'sticker-delete') {
+    stickers.splice(Number(el.dataset.i), 1);
+    saveStickers();
+    renderModal();
+    paintPicker();
+  }
 });
 
 document.addEventListener('submit', (event) => {
@@ -805,10 +978,9 @@ document.addEventListener('submit', (event) => {
     return;
   }
   if (act === 'send-chat') {
-    const input = form.querySelector('input');
-    socket.emit('chat', { text: input.value });
-    chatDraft = '';
-    input.value = '';
+    const input = form.querySelector('input.chat-input');
+    sendChat({ text: input.value });
+    return;
   }
   if (act === 'cinema-url') {
     const input = form.querySelector('input');
@@ -837,6 +1009,10 @@ document.addEventListener('input', (event) => {
     localStorage.setItem(CINEMA_MUTE_KEY, value === 0 ? '1' : '0');
     applyCinemaVolume();
   }
+  if (target?.classList?.contains('emoji-search')) {
+    emojiQuery = target.value;
+    paintEmojiGrid();
+  }
 });
 
 document.addEventListener('change', async (event) => {
@@ -849,14 +1025,46 @@ document.addEventListener('change', async (event) => {
     socket.emit('settings', { ...state.settings, [setting.dataset.settingNum]: Number(setting.value) });
   }
   const input = event.target.closest?.('.avatar-file');
-  if (!input?.files?.[0] || !profileDraft) return;
-  try {
-    profileDraft.avatar = await resizeAvatar(input.files[0]);
-    const typed = document.querySelector('.profile-name');
-    if (typed) profileDraft.name = typed.value;
-    renderModal();
-  } catch {
-    toast('Не удалось прочитать картинку');
+  if (input?.files?.[0] && profileDraft) {
+    try {
+      profileDraft.avatar = await resizeAvatar(input.files[0]);
+      const typed = document.querySelector('.profile-name');
+      if (typed) profileDraft.name = typed.value;
+      renderModal();
+    } catch {
+      toast('Не удалось прочитать картинку');
+    }
+    return;
+  }
+  const stickerInput = event.target.closest?.('.sticker-file');
+  if (stickerInput?.files?.[0]) {
+    try {
+      const data = await resizeSticker(stickerInput.files[0]);
+      if (!/^data:image\/(png|jpeg|webp|gif);base64,/i.test(data) || data.length > 100000) {
+        toast('Стикер слишком большой');
+      } else {
+        stickers.push(data);
+        saveStickers();
+        renderModal();
+        paintPicker();
+        toast('Стикер сохранён');
+      }
+    } catch {
+      toast('Не удалось прочитать стикер');
+    }
+    stickerInput.value = '';
+    return;
+  }
+  const photoInput = event.target.closest?.('.photo-file');
+  if (photoInput?.files?.[0]) {
+    try {
+      const image = await resizePhoto(photoInput.files[0]);
+      const typed = document.querySelector('.chat-input');
+      sendChat({ text: typed?.value || '', image });
+    } catch {
+      toast('Не удалось прочитать фото');
+    }
+    photoInput.value = '';
   }
 });
 
@@ -977,12 +1185,216 @@ setInterval(() => {
   });
 }, 250);
 
-document.addEventListener('pointerdown', () => {
+let swipe = null;
+
+document.addEventListener('pointerdown', (event) => {
   const Ctx = window.AudioContext || window.webkitAudioContext;
-  if (!Ctx) return;
-  if (!audioCtx) audioCtx = new Ctx();
-  if (audioCtx.state === 'suspended') audioCtx.resume();
+  if (Ctx) {
+    if (!audioCtx) audioCtx = new Ctx();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+  }
+  if (emojiOpen && !event.target.closest('.emoji-pop, [data-act="emoji-open"]')) {
+    emojiOpen = false;
+    paintPicker();
+  }
+  const msg = event.target.closest?.('.msg[data-id]');
+  if (!msg || event.target.closest('button, a, input, textarea')) {
+    swipe = null;
+    return;
+  }
+  swipe = { id: msg.dataset.id, x: event.clientX, y: event.clientY, el: msg, dx: 0, active: false };
 });
+
+document.addEventListener('pointermove', (event) => {
+  if (!swipe) return;
+  const dx = event.clientX - swipe.x;
+  const dy = event.clientY - swipe.y;
+  if (!swipe.active) {
+    if (Math.abs(dx) < 10 || Math.abs(dx) < Math.abs(dy)) return;
+    swipe.active = true;
+  }
+  swipe.dx = Math.max(-88, Math.min(88, dx));
+  swipe.el.style.transition = 'none';
+  swipe.el.style.transform = `translateX(${swipe.dx}px)`;
+});
+
+function finishSwipe() {
+  if (!swipe) return;
+  const { el, dx, id, active } = swipe;
+  swipe = null;
+  el.style.transition = '';
+  el.style.transform = '';
+  if (!active || Math.abs(dx) < 56 || !state) return;
+  const msg = (state.chat || []).find((item) => String(item.id) === String(id));
+  if (!msg || isSystemMessage(msg)) return;
+  const text = msg.text || (msg.sticker ? 'Стикер' : msg.image ? 'Фото' : '');
+  if (!text) return;
+  replyDraft = { name: messageName(msg), text: text.slice(0, 140) };
+  paintReply();
+}
+
+document.addEventListener('pointerup', finishSwipe);
+document.addEventListener('pointercancel', () => {
+  if (!swipe) return;
+  swipe.el.style.transition = '';
+  swipe.el.style.transform = '';
+  swipe = null;
+});
+
+function foldText(value) {
+  return String(value || '').toLowerCase().replace(/ё/g, 'е');
+}
+
+function ensureEmoji() {
+  if (emojiPack) return Promise.resolve(emojiPack);
+  if (!ensureEmoji.pending) {
+    ensureEmoji.pending = new Promise((resolve, reject) => {
+      const tag = document.createElement('script');
+      tag.src = '/emoji.js';
+      tag.onload = () => {
+        emojiPack = window.EMOJI_PACK || [];
+        resolve(emojiPack);
+      };
+      tag.onerror = () => reject(new Error('emoji'));
+      document.head.appendChild(tag);
+    });
+  }
+  return ensureEmoji.pending;
+}
+
+function sendChat(extra) {
+  if (!state) return;
+  socket.emit('chat', {
+    text: extra?.text || '',
+    image: extra?.image || '',
+    sticker: extra?.sticker || '',
+    reply: replyDraft,
+  });
+  replyDraft = null;
+  chatDraft = '';
+  emojiOpen = false;
+  const input = document.querySelector('.chat-input');
+  if (input) input.value = '';
+  paintReply();
+  paintPicker();
+}
+
+function sendSticker(index) {
+  const src = stickers[index];
+  if (!src) return;
+  sendChat({ sticker: src });
+}
+
+function saveChatSticker(id) {
+  const msg = (state?.chat || []).find((item) => String(item.id) === String(id));
+  if (!msg?.sticker) return;
+  if (!stickers.includes(msg.sticker)) {
+    stickers.push(msg.sticker);
+    saveStickers();
+    toast('Стикер добавлен');
+  }
+  stickerMenuId = '';
+  refreshChatLog();
+  paintPicker();
+}
+
+function insertEmoji(char) {
+  const input = document.querySelector('.chat-input');
+  if (!input || !char) return;
+  const start = input.selectionStart ?? input.value.length;
+  const end = input.selectionEnd ?? start;
+  input.value = `${input.value.slice(0, start)}${char}${input.value.slice(end)}`;
+  chatDraft = input.value;
+  const caret = start + char.length;
+  input.focus();
+  input.setSelectionRange(caret, caret);
+}
+
+function paintReply() {
+  const form = document.querySelector('.chat-form');
+  if (!form) return;
+  let bar = form.parentElement?.querySelector(':scope > .reply-draft');
+  if (!replyDraft) {
+    bar?.remove();
+    return;
+  }
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.className = 'reply-draft';
+    form.before(bar);
+  }
+  bar.innerHTML = `<span><b>${escapeHtml(replyDraft.name)}</b>${escapeHtml(replyDraft.text)}</span><button type="button" data-act="reply-cancel" aria-label="Отменить ответ">×</button>`;
+}
+
+function refreshChatLog() {
+  if (state?.game === 'cinema') {
+    patchCinemaSide();
+    return;
+  }
+  const log = document.querySelector('.chat-log');
+  if (!log || !state) return;
+  const stick = log.scrollHeight - log.scrollTop - log.clientHeight < 48;
+  log.innerHTML = (state.chat || []).map((msg) => messageHtml(msg)).join('') || '<div class="msg system">Сообщений пока нет</div>';
+  if (stick) log.scrollTop = log.scrollHeight;
+}
+
+function paintPicker() {
+  const pop = document.querySelector('.emoji-pop');
+  if (!pop) return;
+  pop.hidden = !emojiOpen;
+  document.querySelectorAll('[data-act="picker-tab"]').forEach((button) => {
+    button.classList.toggle('on', button.dataset.tab === pickerTab);
+  });
+  if (!emojiOpen) return;
+  const body = pop.querySelector('.emoji-body');
+  if (!body) return;
+  if (pickerTab === 'stickers') {
+    body.innerHTML = stickers.length
+      ? `<div class="sticker-pick">${stickers.map((src, index) => `<button type="button" data-act="sticker-send" data-i="${index}"><img alt="" src="${escapeHtml(src)}"></button>`).join('')}</div>`
+      : '<p class="note">Стикеров пока нет. Добавь их в профиле.</p>';
+    return;
+  }
+  if (!body.querySelector('.emoji-search')) {
+    body.innerHTML = `
+      <input class="emoji-search" placeholder="Поиск" value="${escapeHtml(emojiQuery)}" autocomplete="off">
+      <div class="emoji-cats"></div>
+      <div class="emoji-grid"></div>`;
+  }
+  if (!emojiPack) {
+    const grid = body.querySelector('.emoji-grid');
+    if (grid) grid.textContent = 'Загрузка…';
+    ensureEmoji().then(() => { if (emojiOpen && pickerTab === 'emoji') paintPicker(); }).catch(() => {
+      const failed = document.querySelector('.emoji-grid');
+      if (failed) failed.textContent = 'Не удалось загрузить эмодзи.';
+    });
+    return;
+  }
+  paintEmojiGrid();
+}
+
+function paintEmojiGrid() {
+  if (!emojiPack) return;
+  const cats = document.querySelector('.emoji-cats');
+  const grid = document.querySelector('.emoji-grid');
+  if (!cats || !grid) return;
+  const query = foldText(emojiQuery.trim());
+  cats.innerHTML = emojiPack.map((group, index) => `<button type="button" class="${!query && index === emojiCat ? 'on' : ''}" data-act="emoji-cat" data-cat="${index}">${escapeHtml(group.title)}</button>`).join('');
+  const items = [];
+  if (query) {
+    for (const group of emojiPack) {
+      for (const item of group.items) {
+        if (foldText(item[1]).includes(query) || item[0] === emojiQuery.trim()) items.push(item[0]);
+        if (items.length >= 280) break;
+      }
+      if (items.length >= 280) break;
+    }
+  } else {
+    items.push(...(emojiPack[emojiCat] || emojiPack[0]).items.map((item) => item[0]));
+  }
+  grid.innerHTML = items.length
+    ? items.map((char) => `<button type="button" data-act="emoji-insert">${char}</button>`).join('')
+    : '<p class="note">Ничего не нашлось</p>';
+}
 
 const CINEMA_VOL_KEY = 'leisure-cinema-volume';
 const CINEMA_MUTE_KEY = 'leisure-cinema-muted';
@@ -996,6 +1408,8 @@ let cinemaMounted = '';
 let cinemaClockOffset = 0;
 let ytPlayer = null;
 let ytReady = null;
+let twitchPlayer = null;
+let twitchReady = null;
 let ytCatching = false;
 let ytSawPlayback = false;
 let remoteAction = 0;
@@ -1008,6 +1422,7 @@ function cinemaStructure(snapshot) {
   return JSON.stringify({
     code: snapshot.code,
     videoId: snapshot.video?.id || '',
+    kind: snapshot.video?.kind || '',
     screen: Boolean(snapshot.screen),
     youHost: Boolean(snapshot.youHost),
   });
@@ -1040,11 +1455,7 @@ function chatStamp(at) {
 }
 
 function cinemaMessages() {
-  const lines = (state?.chat || []).map((msg) => {
-    if (msg.system) return `<div class="msg system">${escapeHtml(msg.text)}</div>`;
-    const who = msg.name || 'Зритель';
-    return `<div class="msg${msg.mine ? ' mine' : ''}"><b>${escapeHtml(who)} · ${chatStamp(msg.at)}</b>${escapeHtml(msg.text)}</div>`;
-  }).join('');
+  const lines = (state?.chat || []).map((msg) => messageHtml(msg)).join('');
   return lines || '<div class="msg system">Сообщений пока нет</div>';
 }
 
@@ -1069,22 +1480,30 @@ function cinemaHtml() {
     stage = `
       <video class="screen-video" autoplay playsinline></video>
       <p class="stage-caption">${host ? 'Ты показываешь экран' : 'Демонстрация экрана хоста'}</p>`;
+  } else if (state.video?.kind === 'twitch' && state.video.clip) {
+    const parent = encodeURIComponent(location.hostname);
+    stage = `<iframe class="twitch-clip" src="https://clips.twitch.tv/embed?clip=${encodeURIComponent(state.video.id)}&parent=${parent}&autoplay=true" allowfullscreen></iframe>`;
+  } else if (state.video?.kind === 'twitch' && state.video.id) {
+    stage = '<div id="tw-player"></div><p class="stage-error" hidden></p>';
+  } else if (state.video?.kind === 'file' && state.video.id) {
+    stage = '<video class="cloud-video" playsinline controls></video><p class="stage-error" hidden></p>';
   } else if (state.video?.id) {
     stage = '<div id="yt-player"></div><p class="stage-error" hidden></p>';
   } else {
     stage = `
       <div class="source-box">
-        <p>${host ? 'Вставь ссылку на YouTube или начни демонстрацию экрана.' : 'Хост ещё не выбрал, что смотреть.'}</p>
+        <p>${host ? 'Вставь ссылку на YouTube, Twitch, Google Drive или Dropbox. Или начни демонстрацию экрана.' : 'Хост ещё не выбрал, что смотреть.'}</p>
         ${host ? `<form data-act="cinema-url">
-          <input class="cinema-url" value="${escapeHtml(cinemaUrlDraft)}" placeholder="https://www.youtube.com/watch?v=..." autocomplete="off">
+          <input class="cinema-url" value="${escapeHtml(cinemaUrlDraft)}" placeholder="YouTube, Twitch, Drive или Dropbox" autocomplete="off">
           <button class="btn" type="submit">Смотреть вместе</button>
         </form>` : ''}
       </div>`;
   }
-  const tools = state.screen || state.video?.id ? `
+  const showQuality = state.video?.id && !state.screen && !state.video.clip && (state.video.kind === 'youtube' || state.video.kind === 'twitch' || !state.video.kind);
+  const tools = (state.screen || (state.video?.id && !state.video.clip)) ? `
     <div class="cinema-tools">
       <label>Громкость <input class="cinema-volume" type="range" min="0" max="100" value="${volume}"></label>
-      ${state.video?.id && !state.screen ? `<label>Качество
+      ${showQuality ? `<label>Качество
         <select class="cinema-quality">
           ${[['auto', 'Авто'], ['small', '240p'], ['medium', '360p'], ['large', '480p'], ['hd720', '720p'], ['hd1080', '1080p']].map(([item, label]) => `<option value="${item}" ${item === quality ? 'selected' : ''}>${label}</option>`).join('')}
         </select>
@@ -1093,7 +1512,7 @@ function cinemaHtml() {
   const hostBar = host ? `
     <div class="host-bar">
       ${state.video?.id && !state.screen ? `<form data-act="cinema-url">
-        <input class="cinema-url" value="${escapeHtml(cinemaUrlDraft)}" placeholder="Другая ссылка YouTube" autocomplete="off">
+        <input class="cinema-url" value="${escapeHtml(cinemaUrlDraft)}" placeholder="Другая ссылка" autocomplete="off">
         <button class="btn" type="submit">Сменить</button>
       </form>` : ''}
       ${state.screen
@@ -1122,10 +1541,7 @@ function cinemaHtml() {
         </div>
         <div class="cinema-chat" ${cinemaTab === 'chat' ? '' : 'hidden'}>
           <div class="chat-log cinema-log">${cinemaMessages()}</div>
-          <form class="chat-form" data-act="send-chat">
-            <input class="chat-input" maxlength="400" placeholder="Сообщение" autocomplete="off">
-            <button type="submit">Отправить</button>
-          </form>
+          ${chatComposer()}
         </div>
         <ul class="cinema-people" ${cinemaTab === 'people' ? '' : 'hidden'}>${cinemaPeople()}</ul>
       </aside>
@@ -1168,6 +1584,7 @@ function renderCinema() {
     const log = document.querySelector('.cinema-log');
     if (log) log.scrollTop = log.scrollHeight;
     mountCinemaStage();
+    paintPicker();
     return;
   }
   patchCinemaSide();
@@ -1213,20 +1630,29 @@ function loadYouTube() {
 function mountCinemaStage() {
   ytCatching = false;
   ytSawPlayback = false;
+  lastSample = 0;
+  destroyYouTube();
+  destroyTwitch();
   if (state.screen) {
-    destroyYouTube();
     applyCinemaVolume();
     if (state.youHost && screenStream) attachLocalPreview();
     return;
   }
   closeWatch();
-  if (!state.video?.id) {
-    destroyYouTube();
+  const video = state.video;
+  if (!video?.id) return;
+  if (video.kind === 'twitch') {
+    if (!video.clip) mountTwitch();
+    return;
+  }
+  if (video.kind === 'file') {
+    mountCloud();
     return;
   }
   const mount = document.getElementById('yt-player');
   if (!mount) return;
   loadYouTube().then(() => {
+    if (state?.video?.kind === 'file' || state?.video?.kind === 'twitch') return;
     if (!state?.video?.id || state.screen || !document.getElementById('yt-player')) return;
     destroyYouTube();
     ytPlayer = new YT.Player('yt-player', {
@@ -1264,6 +1690,89 @@ function destroyYouTube() {
   ytPlayer = null;
 }
 
+function destroyTwitch() {
+  twitchPlayer = null;
+  const mount = document.getElementById('tw-player');
+  if (mount) mount.innerHTML = '';
+}
+
+function loadTwitch() {
+  if (window.Twitch?.Player) return Promise.resolve();
+  if (!twitchReady) {
+    twitchReady = new Promise((resolve, reject) => {
+      const tag = document.createElement('script');
+      tag.src = 'https://player.twitch.tv/js/embed/v1.js';
+      tag.onload = () => resolve();
+      tag.onerror = () => reject(new Error('twitch'));
+      document.head.appendChild(tag);
+    });
+  }
+  return twitchReady;
+}
+
+function mountTwitch() {
+  const mount = document.getElementById('tw-player');
+  if (!mount || !state?.video?.id) return;
+  loadTwitch().then(() => {
+    if (!state?.video || state.video.kind !== 'twitch' || state.video.clip || state.screen) return;
+    if (!document.getElementById('tw-player') || !window.Twitch?.Player) return;
+    destroyTwitch();
+    const options = {
+      width: '100%',
+      height: '100%',
+      parent: [location.hostname],
+      autoplay: true,
+    };
+    if (state.video.live) options.channel = state.video.id;
+    else options.video = state.video.id;
+    twitchPlayer = new Twitch.Player('tw-player', options);
+    const player = twitchPlayer;
+    player.addEventListener(Twitch.Player.READY, () => {
+      applyCinemaVolume();
+      applyCinemaQuality();
+      if (!state.video.live) syncYouTube(true);
+    });
+    player.addEventListener(Twitch.Player.PLAY, () => {
+      noteMediaPlay(player.getCurrentTime?.() || 0);
+    });
+    player.addEventListener(Twitch.Player.PAUSE, () => {
+      noteMediaPause(player.getCurrentTime?.() || 0);
+    });
+    player.addEventListener(Twitch.Player.OFFLINE, () => {
+      showStageError('Этот канал сейчас не в эфире.');
+    });
+  }).catch(() => showStageError('Не удалось загрузить плеер Twitch.'));
+}
+
+function mountCloud() {
+  const node = document.querySelector('.cloud-video');
+  if (!node || !state?.video?.id) return;
+  node.src = `/media/${encodeURIComponent(state.code)}?t=${encodeURIComponent(token)}&v=${encodeURIComponent(state.video.id)}`;
+  applyCinemaVolume();
+  node.addEventListener('error', () => {
+    showStageError('Файл не открывается. Проверь, что ссылка доступна всем, у кого она есть, и это видео.');
+  });
+  node.addEventListener('play', () => noteMediaPlay(node.currentTime || 0));
+  node.addEventListener('pause', () => {
+    if (node.seeking) return;
+    noteMediaPause(node.currentTime || 0);
+  });
+  node.addEventListener('loadeddata', () => syncYouTube(true));
+}
+
+function noteMediaPlay(time) {
+  if (!state?.video?.id || state.screen || state.video.live) return;
+  ytSawPlayback = true;
+  if (remoteAction || document.hidden) return;
+  if (!state.video.playing) socket.emit('cinema:play', { time });
+}
+
+function noteMediaPause(time) {
+  if (!state?.video?.id || state.screen || state.video.live) return;
+  if (remoteAction || document.hidden || !ytSawPlayback) return;
+  if (state.video.playing || state.video.pauseAt != null) socket.emit('cinema:pause', { time });
+}
+
 function showStageError(text) {
   const error = document.querySelector('.stage-error');
   if (!error) {
@@ -1299,39 +1808,93 @@ function applyCinemaVolume() {
     if (muted) ytPlayer.mute();
     else ytPlayer.unMute();
   }
-  const video = document.querySelector('.screen-video');
-  if (video) {
-    video.volume = volume / 100;
-    video.muted = muted;
+  if (twitchPlayer?.setVolume) {
+    try {
+      twitchPlayer.setVolume(volume / 100);
+      twitchPlayer.setMuted(muted);
+    } catch { /* player is still starting */ }
+  }
+  document.querySelectorAll('.cloud-video').forEach((node) => {
+    node.volume = volume / 100;
+    node.muted = muted;
+  });
+  const screen = document.querySelector('.screen-video');
+  if (screen && !state?.youHost) {
+    screen.volume = volume / 100;
+    screen.muted = muted;
   }
 }
 
 function applyCinemaQuality() {
   const quality = savedQuality();
-  if (!ytPlayer || quality === 'auto') return;
-  try {
-    ytPlayer.setPlaybackQuality(quality);
-  } catch { /* quality hint is best-effort */ }
-}
-
-function onYouTubeState(event) {
-  if (!state?.video?.id || state.screen) return;
-  if (event.data === YT.PlayerState.PLAYING) ytSawPlayback = true;
-  if (remoteAction || document.hidden) return;
-  const time = ytPlayer?.getCurrentTime?.() || 0;
-  if (event.data === YT.PlayerState.PAUSED) {
-    if (!ytSawPlayback) return;
-    if (state.video.playing || state.video.pauseAt != null) socket.emit('cinema:pause', { time });
-  } else if (event.data === YT.PlayerState.PLAYING) {
-    if (!state.video.playing) socket.emit('cinema:play', { time });
+  if (quality === 'auto') return;
+  if (ytPlayer) {
+    try { ytPlayer.setPlaybackQuality(quality); } catch { /* quality hint is best-effort */ }
+  }
+  if (twitchPlayer?.setQuality) {
+    const names = { small: '160p', medium: '360p', large: '480p', hd720: '720p', hd1080: '1080p' };
+    try { twitchPlayer.setQuality(names[quality] || quality); } catch { /* ignore */ }
   }
 }
 
+function onYouTubeState(event) {
+  if (!state?.video?.id || state.screen || state.video.live) return;
+  if (event.data === YT.PlayerState.PLAYING) noteMediaPlay(ytPlayer?.getCurrentTime?.() || 0);
+  else if (event.data === YT.PlayerState.PAUSED) noteMediaPause(ytPlayer?.getCurrentTime?.() || 0);
+}
+
+function playbackAdapter() {
+  const video = state?.video;
+  if (!video?.id || video.live || state?.screen) return null;
+  if (video.kind !== 'twitch' && video.kind !== 'file' && ytPlayer?.getCurrentTime && window.YT?.PlayerState) {
+    return {
+      time: () => ytPlayer.getCurrentTime() || 0,
+      status: () => ytPlayer.getPlayerState?.(),
+      seek: (t) => ytPlayer.seekTo(t, true),
+      play: () => ytPlayer.playVideo(),
+      pause: () => ytPlayer.pauseVideo(),
+      rate: (n) => { try { ytPlayer.setPlaybackRate(n); } catch { /* ignore */ } },
+      PLAYING: YT.PlayerState.PLAYING,
+      BUFFERING: YT.PlayerState.BUFFERING,
+    };
+  }
+  if (video.kind === 'twitch' && twitchPlayer && typeof twitchPlayer.getCurrentTime === 'function') {
+    let status = 1;
+    try { status = twitchPlayer.isPaused() ? 2 : 1; } catch { status = 1; }
+    return {
+      time: () => { try { return twitchPlayer.getCurrentTime() || 0; } catch { return 0; } },
+      status: () => status,
+      seek: (t) => twitchPlayer.seek(t),
+      play: () => twitchPlayer.play(),
+      pause: () => twitchPlayer.pause(),
+      rate: () => {},
+      PLAYING: 1,
+      BUFFERING: -99,
+      jumpCatchup: true,
+    };
+  }
+  const node = document.querySelector('.cloud-video');
+  if (video.kind === 'file' && node) {
+    return {
+      time: () => node.currentTime || 0,
+      status: () => ((node.seeking || node.readyState < 3) && !node.paused ? 3 : (node.paused ? 2 : 1)),
+      seek: (t) => { node.currentTime = t; },
+      play: () => node.play().catch(() => {}),
+      pause: () => node.pause(),
+      rate: (n) => { node.playbackRate = n; },
+      PLAYING: 1,
+      BUFFERING: 3,
+    };
+  }
+  return null;
+}
+
 function syncYouTube(force) {
-  if (!ytPlayer?.getCurrentTime || !state?.video?.id || state.screen || !window.YT?.PlayerState) return;
+  const player = playbackAdapter();
+  if (!player || !state?.video?.id) return;
   const target = mediaClock(state.video);
-  const local = ytPlayer.getCurrentTime() || 0;
-  const playerState = ytPlayer.getPlayerState?.();
+  const local = player.time() || 0;
+  const playerState = player.status();
   const pauseAt = state.video.pauseAt;
   const playing = state.video.playing;
   if (state.youHost && !remoteAction && Math.abs(local - lastSample) > 2.4 && Math.abs(local - target) > 2.4) {
@@ -1339,46 +1902,58 @@ function syncYouTube(force) {
     socket.emit('cinema:seek', { time: local });
     return;
   }
-  if (!state.youHost && !remoteAction && Math.abs(local - lastSample) > 2.4 && Math.abs(local - target) > 1.5 && playerState !== YT.PlayerState.BUFFERING) {
+  if (!state.youHost && !remoteAction && Math.abs(local - lastSample) > 2.4 && Math.abs(local - target) > 1.5 && playerState !== player.BUFFERING) {
     lastSample = local;
-    withRemote(() => ytPlayer.seekTo(Math.max(0, target), true));
+    withRemote(() => player.seek(Math.max(0, target)));
     return;
   }
   lastSample = local;
   if (pauseAt != null && local >= pauseAt - 0.25) {
     ytCatching = false;
-    try { ytPlayer.setPlaybackRate(1); } catch { /* ignore */ }
-    if (playerState === YT.PlayerState.PLAYING) withRemote(() => ytPlayer.pauseVideo());
+    player.rate(1);
+    if (playerState === player.PLAYING) withRemote(() => player.pause());
     return;
   }
   if (!playing && pauseAt == null) {
     ytCatching = false;
-    try { ytPlayer.setPlaybackRate(1); } catch { /* ignore */ }
-    if (Math.abs(local - state.video.at) > 1.2) withRemote(() => ytPlayer.seekTo(state.video.at, true));
-    if (playerState === YT.PlayerState.PLAYING) withRemote(() => ytPlayer.pauseVideo());
+    player.rate(1);
+    if (Math.abs(local - state.video.at) > 1.2) withRemote(() => player.seek(state.video.at));
+    if (playerState === player.PLAYING) withRemote(() => player.pause());
     return;
   }
   const behind = target - local;
+  if (player.jumpCatchup) {
+    if (behind >= 5) withRemote(() => player.seek(Math.max(0, target)));
+    else if (behind < -1.5 && !state.youHost) withRemote(() => player.seek(Math.max(0, target)));
+    if (force) {
+      withRemote(() => {
+        player.seek(Math.max(0, target));
+        if (playing && pauseAt == null) player.play();
+      });
+    }
+    return;
+  }
   if (!ytCatching && behind >= 5) ytCatching = true;
   if (ytCatching && behind <= 0.35) ytCatching = false;
-  try { ytPlayer.setPlaybackRate(ytCatching ? (behind >= 12 ? 2 : 1.5) : 1); } catch { /* ignore */ }
+  player.rate(ytCatching ? (behind >= 12 ? 2 : 1.5) : 1);
   if (!state.youHost && behind < -1.5) {
-    withRemote(() => ytPlayer.seekTo(Math.max(0, target), true));
+    withRemote(() => player.seek(Math.max(0, target)));
     return;
   }
   if (force) {
     withRemote(() => {
-      ytPlayer.seekTo(Math.max(0, target), true);
-      if (playing && pauseAt == null) ytPlayer.playVideo();
+      player.seek(Math.max(0, target));
+      if (playing && pauseAt == null) player.play();
     });
     return;
   }
-  const stalled = playerState !== YT.PlayerState.PLAYING && playerState !== YT.PlayerState.BUFFERING;
-  if (stalled && playing && pauseAt == null) withRemote(() => ytPlayer.playVideo());
+  const stalled = playerState !== player.PLAYING && playerState !== player.BUFFERING;
+  if (stalled && playing && pauseAt == null) withRemote(() => player.play());
 }
 
 function stopCinemaMedia() {
   destroyYouTube();
+  destroyTwitch();
   closeHostPeers();
   closeWatch();
   if (screenStream) {
