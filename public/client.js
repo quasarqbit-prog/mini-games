@@ -16,11 +16,9 @@ function makeToken() {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-let token = sessionStorage.getItem(TOKEN_KEY) || '';
-if (!token) {
-  token = makeToken();
-  sessionStorage.setItem(TOKEN_KEY, token);
-}
+let token = (localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY) || '').replace(/[^\w-]/g, '').slice(0, 80);
+if (!token) token = makeToken();
+localStorage.setItem(TOKEN_KEY, token);
 
 const PROFILE_KEY = 'mg-profile';
 
@@ -39,6 +37,8 @@ function loadProfile() {
 const socket = io({ auth: { token } });
 
 let connected = false;
+let booting = true;
+let onlineUsers = [];
 let state = null;
 let draft = '';
 let chatDraft = '';
@@ -267,11 +267,25 @@ function chatHtml(compact) {
     </section>`;
 }
 
+function onlineHtml() {
+  const people = onlineUsers.map((person) => `
+    <li class="online-person">
+      ${avatarHtml(person, person.name || 'Игрок')}
+      <span>${escapeHtml(person.name || 'Без имени')}</span>
+      ${person.you ? '<i>это ты</i>' : ''}
+    </li>`).join('');
+  return `
+    <section class="online">
+      <h2>Сейчас онлайн</h2>
+      ${people ? `<ul>${people}</ul>` : '<p class="note">Пока никого нет</p>'}
+    </section>`;
+}
+
 function homeHtml() {
-  if (inviteCode && !state) {
+  if ((inviteCode || booting) && !state) {
     return `
       <section class="home">
-        <p class="lead">Подключаемся к комнате…</p>
+        <p class="lead">Подключаемся…</p>
       </section>`;
   }
   return `
@@ -291,6 +305,7 @@ function homeHtml() {
           <span class="tag">2 игрока</span>
         </button>
       </div>
+      ${onlineHtml()}
     </section>`;
 }
 
@@ -821,23 +836,34 @@ socket.on('connect', () => {
   connected = true;
   socket.emit('profile', profile);
   if (inviteCode && !state) socket.emit('join', { code: inviteCode });
-  if (!state) render();
 });
 
 socket.on('disconnect', () => {
   connected = false;
+  booting = false;
   toast('Нет связи с сервером');
+  if (!state) render();
 });
 
 socket.on('hello', (payload) => {
   if (payload?.token && payload.token !== token) {
     token = payload.token;
-    sessionStorage.setItem(TOKEN_KEY, token);
+    localStorage.setItem(TOKEN_KEY, token);
   }
+  if (!payload?.inRoom) {
+    booting = false;
+    if (!state) render();
+  }
+});
+
+socket.on('online', (list) => {
+  onlineUsers = Array.isArray(list) ? list : [];
+  if (!state && !booting) render();
 });
 
 socket.on('state', (next) => {
   const prev = state;
+  booting = false;
   popRole = null;
   if (!prev || prev.code !== next.code || prev.phase !== next.phase) {
     draft = '';

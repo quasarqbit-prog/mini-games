@@ -20,6 +20,7 @@ app.get('/api/health', (_req, res) => {
 
 const rooms = new Map();
 const profiles = new Map();
+const presence = new Map();
 
 function makeCode() {
   let code = '';
@@ -216,6 +217,52 @@ function applyProfile(slot) {
   slot.avatar = saved?.avatar || '';
 }
 
+function presenceEntry(token) {
+  let entry = presence.get(token);
+  if (!entry) {
+    entry = { name: '', avatar: '', sockets: new Set() };
+    presence.set(token, entry);
+  }
+  return entry;
+}
+
+function notePresence(socket) {
+  const entry = presenceEntry(socket.data.token);
+  entry.sockets.add(socket.id);
+  const saved = profiles.get(socket.data.token);
+  if (saved) {
+    entry.name = saved.name;
+    entry.avatar = saved.avatar;
+  }
+}
+
+function forgetPresence(socket) {
+  const entry = presence.get(socket.data.token);
+  if (!entry) return;
+  entry.sockets.delete(socket.id);
+  if (!entry.sockets.size) presence.delete(socket.data.token);
+}
+
+function onlinePayload(forToken) {
+  const list = [];
+  for (const [token, entry] of presence) {
+    if (!entry.sockets.size) continue;
+    list.push({
+      name: entry.name || '',
+      avatar: entry.avatar || '',
+      you: token === forToken,
+    });
+  }
+  list.sort((a, b) => Number(b.you) - Number(a.you) || a.name.localeCompare(b.name, 'ru'));
+  return list;
+}
+
+function broadcastOnline() {
+  for (const socket of io.sockets.sockets.values()) {
+    socket.emit('online', onlinePayload(socket.data.token));
+  }
+}
+
 function publicView(room, token) {
   const you = roleOf(room, token);
   const player = (slot) => (slot ? {
@@ -307,9 +354,10 @@ io.use((socket, next) => {
 });
 
 io.on('connection', (socket) => {
-  socket.emit('hello', { token: socket.data.token });
-
+  notePresence(socket);
   const existing = findByToken(socket.data.token);
+  socket.emit('hello', { token: socket.data.token, inRoom: Boolean(existing) });
+  broadcastOnline();
   if (existing) attach(socket, existing);
 
   socket.on('create', ({ game } = {}) => {
@@ -461,6 +509,12 @@ io.on('connection', (socket) => {
       fail(socket, 'Аватарка слишком большая или неподходящего формата');
     }
     profiles.set(socket.data.token, { name: clean, avatar: picture });
+    const entry = presence.get(socket.data.token);
+    if (entry) {
+      entry.name = clean;
+      entry.avatar = picture;
+    }
+    broadcastOnline();
     const room = findByToken(socket.data.token);
     if (!room) return;
     const role = roleOf(room, socket.data.token);
@@ -509,6 +563,8 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
+    forgetPresence(socket);
+    broadcastOnline();
     const room = findByToken(socket.data.token);
     if (!room) return;
     const role = roleOf(room, socket.data.token);
@@ -551,7 +607,7 @@ setInterval(() => {
 
 if (require.main === module) {
   server.listen(PORT, () => {
-    console.log(`Mini Games listening on http://localhost:${PORT}`);
+    console.log(`leisure listening on http://localhost:${PORT}`);
   });
 }
 

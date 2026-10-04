@@ -48,9 +48,19 @@ async function main() {
 
   const host = connect('host-token');
   const guest = connect('guest-token');
+  const onlineSeen = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('timeout: online')), 4000);
+    host.on('online', (list) => {
+      if (list.length >= 2 && list.some((person) => person.you)) {
+        clearTimeout(timer);
+        resolve(list);
+      }
+    });
+  });
   await Promise.all([
     new Promise((resolve) => host.on('connect', resolve)),
     new Promise((resolve) => guest.on('connect', resolve)),
+    onlineSeen,
   ]);
 
   host.emit('create', { game: 'wordle' });
@@ -60,6 +70,32 @@ async function main() {
   const joined = await guest.when((s) => s.you === 'guest' && s.guest?.connected, 'join');
   assert(joined.code === created.code, 'same room');
   await host.when((s) => s.guest?.connected, 'host sees guest');
+
+  guest.disconnect();
+  await host.when((s) => s.guest && !s.guest.connected, 'guest offline');
+  const stranger = connect('stranger-token');
+  await new Promise((resolve) => stranger.on('connect', resolve));
+  const denied = await new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(''), 1500);
+    stranger.on('errorMsg', (payload) => {
+      clearTimeout(timer);
+      resolve(typeof payload === 'string' ? payload : payload.text);
+    });
+    stranger.emit('join', { code: created.code });
+  });
+  assert(/два игрока/.test(denied), `seat kept: ${denied}`);
+  stranger.close();
+  const restored = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('timeout: restore')), 4000);
+    guest.once('state', (next) => {
+      clearTimeout(timer);
+      resolve(next);
+    });
+  });
+  guest.connect();
+  const back = await restored;
+  assert(back.you === 'guest' && back.guest.connected, 'guest restored');
+  await host.when((s) => s.guest?.connected, 'host sees return');
   host.emit('settings', {
     lengthMode: 'exact', length: 4, timerOn: false, minutes: 0, seconds: 0, hidden: true, firstTurn: 'host',
   });
