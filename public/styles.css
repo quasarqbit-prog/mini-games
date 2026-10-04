@@ -243,11 +243,19 @@ button {
   margin: 12px 0 8px;
 }
 
+.code-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin: 4px 0 8px;
+}
+
 .code-value {
   font-family: Unbounded, Manrope, sans-serif;
   font-size: clamp(32px, 6vw, 48px);
   letter-spacing: 0.18em;
-  margin: 0;
+  margin: 12px 0 8px;
 }
 
 .note {

@@ -62,8 +62,19 @@ function toast(text) {
   setTimeout(() => el.remove(), 3200);
 }
 
-function copyCode(text) {
-  const done = (ok) => toast(ok ? 'Код скопирован' : 'Не удалось скопировать');
+function roomFromUrl() {
+  const code = new URLSearchParams(location.search).get('room') || '';
+  return code.trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+}
+
+let inviteCode = roomFromUrl();
+
+function inviteUrl(code) {
+  return `${location.origin}/?room=${encodeURIComponent(code)}`;
+}
+
+function copyText(text, okMessage) {
+  const done = (ok) => toast(ok ? okMessage : 'Не удалось скопировать');
   const fallback = () => {
     const area = document.createElement('textarea');
     area.value = text;
@@ -86,6 +97,10 @@ function copyCode(text) {
     return;
   }
   fallback();
+}
+
+function copyCode(text) {
+  copyText(text, 'Код скопирован');
 }
 
 let audioCtx = null;
@@ -253,9 +268,15 @@ function chatHtml(compact) {
 }
 
 function homeHtml() {
+  if (inviteCode && !state) {
+    return `
+      <section class="home">
+        <p class="lead">Подключаемся к комнате…</p>
+      </section>`;
+  }
   return `
     <section class="home">
-      <p class="lead">Открой игру и скинь код другу. Он вводит код здесь и подключается в ту же комнату.</p>
+      <p class="lead">Открой игру и скинь код или ссылку другу. По ссылке он сразу попадёт в лобби.</p>
       <form class="join" data-act="join">
         <label for="room-code">Код комнаты</label>
         <input id="room-code" maxlength="8" autocomplete="off" placeholder="ABCDE" ${connected ? '' : 'disabled'}>
@@ -280,11 +301,12 @@ function lobbyHtml() {
     <section class="lobby">
       <div class="code-block">
         <p class="hint">Код комнаты</p>
-        <div class="code-row">
-          <p class="code-value">${escapeHtml(state.code)}</p>
-          <button class="btn" type="button" data-act="copy">Скопировать</button>
+        <p class="code-value">${escapeHtml(state.code)}</p>
+        <div class="code-actions">
+          <button class="btn" type="button" data-act="copy-link">Скопировать ссылку</button>
+          <button class="btn ghost" type="button" data-act="copy">Скопировать код</button>
         </div>
-        <p class="note">Скинь этот код другу. Он вводит его на главной и нажимает «Присоединиться».</p>
+        <p class="note">Ссылка открывает это лобби сразу. Код можно ввести на главной.</p>
       </div>
       <div class="players">
         <div class="player online">
@@ -672,6 +694,10 @@ document.addEventListener('click', (event) => {
     copyCode(state.code);
     return;
   }
+  if (act === 'copy-link' && state) {
+    copyText(inviteUrl(state.code), 'Ссылка скопирована');
+    return;
+  }
   if (act === 'start') socket.emit('start');
   if (act === 'leave') socket.emit('leave');
   if (act === 'again') socket.emit('again');
@@ -794,6 +820,7 @@ document.addEventListener('keydown', (event) => {
 socket.on('connect', () => {
   connected = true;
   socket.emit('profile', profile);
+  if (inviteCode && !state) socket.emit('join', { code: inviteCode });
   if (!state) render();
 });
 
@@ -837,6 +864,7 @@ socket.on('state', (next) => {
   }
   if (next.phase !== 'play') pendingPane = null;
   if (next.phase === 'setup' && (!prev || prev.phase !== 'setup')) mobilePane = 'mine';
+  if (inviteCode && next.code === inviteCode) inviteCode = '';
   state = next;
   if (prev && viewKey(prev) === viewKey(next)) return;
   render();
@@ -854,6 +882,10 @@ socket.on('closed', ({ message }) => {
 
 socket.on('errorMsg', (payload) => {
   const text = typeof payload === 'string' ? payload : payload.text;
+  if (inviteCode && !state) {
+    inviteCode = '';
+    render();
+  }
   toast(text || 'Ошибка');
   if (payload?.shake) shakeDraft();
 });
