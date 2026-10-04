@@ -19,6 +19,7 @@ app.get('/api/health', (_req, res) => {
 });
 
 const rooms = new Map();
+const profiles = new Map();
 
 function makeCode() {
   let code = '';
@@ -69,6 +70,7 @@ function emptyRoom(code) {
     winner: null,
     chat: [],
     chatSeq: 1,
+    drafts: { host: '', guest: '' },
   };
 }
 
@@ -94,6 +96,7 @@ function pushChat(room, from, text) {
   room.chat.push({
     id: room.chatSeq,
     from,
+    name: from === 'system' ? '' : playerLabel(room, from),
     text,
     at: Date.now(),
   });
@@ -105,9 +108,35 @@ function cleanText(raw) {
   return String(raw || '').replace(/[\u0000-\u001F]/g, '').trim().slice(0, 400);
 }
 
+function cleanName(raw) {
+  return String(raw || '').replace(/[\u0000-\u001F]/g, '').replace(/\s+/g, ' ').trim().slice(0, 20);
+}
+
+function cleanAvatar(raw) {
+  const value = String(raw || '');
+  if (!value) return '';
+  if (!/^data:image\/(png|jpeg|webp);base64,[a-z0-9+/=]+$/i.test(value)) return '';
+  if (value.length > 100000) return '';
+  return value;
+}
+
+function playerLabel(room, role) {
+  return room[role]?.name || (role === 'host' ? 'Хост' : 'Друг');
+}
+
+function applyProfile(slot) {
+  const saved = profiles.get(slot.token);
+  slot.name = saved?.name || '';
+  slot.avatar = saved?.avatar || '';
+}
+
 function publicView(room, token) {
   const you = roleOf(room, token);
-  const player = (slot) => (slot ? { connected: Boolean(slot.connected) } : null);
+  const player = (slot) => (slot ? {
+    connected: Boolean(slot.connected),
+    name: slot.name || '',
+    avatar: slot.avatar || '',
+  } : null);
   return {
     code: room.code,
     game: room.game,
@@ -126,6 +155,10 @@ function publicView(room, token) {
       guest: room.target.guest ? classifyWord(room.target.guest) : null,
     },
     boards: room.boards,
+    drafts: {
+      host: room.turn === 'host' ? room.drafts.host : '',
+      guest: room.turn === 'guest' ? room.drafts.guest : '',
+    },
     turn: room.turn,
     winner: room.winner,
     answers: room.phase === 'done'
@@ -169,6 +202,7 @@ function resetMatch(room) {
   room.target = { host: null, guest: null };
   room.submitted = { host: false, guest: false };
   room.boards = { host: [], guest: [] };
+  room.drafts = { host: '', guest: '' };
   room.turn = 'host';
   room.winner = null;
 }
@@ -195,6 +229,7 @@ io.on('connection', (socket) => {
     if (rooms.size > 500) return fail(socket, 'Слишком много комнат, попробуй позже');
     const room = emptyRoom(makeCode());
     room.host = { token: socket.data.token, connected: true, socketId: socket.id };
+    applyProfile(room.host);
     rooms.set(room.code, room);
     socket.join(room.code);
     pushChat(room, 'system', 'Комната создана. Скинь код другу.');
@@ -220,8 +255,9 @@ io.on('connection', (socket) => {
     if (room.guest) return fail(socket, 'В комнате уже два игрока');
 
     room.guest = { token: socket.data.token, connected: true, socketId: socket.id };
+    applyProfile(room.guest);
     socket.join(room.code);
-    pushChat(room, 'system', 'Друг подключился.');
+    pushChat(room, 'system', `${playerLabel(room, 'guest')} подключился.`);
     broadcast(room);
   });
 
@@ -279,11 +315,41 @@ io.on('connection', (socket) => {
     if (clean === secret) {
       room.phase = 'done';
       room.winner = role;
-      const name = role === 'host' ? 'Хост' : 'Друг';
-      pushChat(room, 'system', `${name} угадал слово и победил.`);
+      pushChat(room, 'system', `${playerLabel(room, role)} угадал слово и победил.`);
     } else {
       room.turn = otherRole(role);
     }
+    room.drafts.host = '';
+    room.drafts.guest = '';
+    broadcast(room);
+  });
+
+  socket.on('draft', ({ word } = {}) => {
+    const room = findByToken(socket.data.token);
+    if (!room || room.phase !== 'play') return;
+    const role = roleOf(room, socket.data.token);
+    if (room.turn !== role || !room.target[role]) return;
+    const secret = room.target[role];
+    const script = classifyWord(secret);
+    const clean = String(word || '').toLowerCase().slice(0, secret.length);
+    const ok = script === 'en' ? /^[a-z]*$/.test(clean) : /^[а-яё]*$/.test(clean);
+    if (!ok || clean === room.drafts[role]) return;
+    room.drafts[role] = clean;
+    broadcast(room);
+  });
+
+  socket.on('profile', ({ name, avatar } = {}) => {
+    const clean = cleanName(name);
+    let picture = cleanAvatar(avatar);
+    if (avatar && !picture) {
+      fail(socket, 'Аватарка слишком большая или неподходящего формата');
+    }
+    profiles.set(socket.data.token, { name: clean, avatar: picture });
+    const room = findByToken(socket.data.token);
+    if (!room) return;
+    const role = roleOf(room, socket.data.token);
+    room[role].name = clean;
+    room[role].avatar = picture;
     broadcast(room);
   });
 

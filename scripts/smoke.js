@@ -60,6 +60,9 @@ async function main() {
   const joined = await guest.when((s) => s.you === 'guest' && s.guest?.connected, 'join');
   assert(joined.code === created.code, 'same room');
   await host.when((s) => s.guest?.connected, 'host sees guest');
+  host.emit('profile', { name: 'Богдан', avatar: '' });
+  const named = await host.when((s) => s.host?.name === 'Богдан', 'profile');
+  assert(named.host.avatar === '', 'avatar empty');
 
   host.emit('start');
   await host.when((s) => s.phase === 'setup', 'setup');
@@ -69,6 +72,9 @@ async function main() {
   const playing = await host.when((s) => s.phase === 'play', 'play');
   assert(playing.lengths.host === 5 && playing.lengths.guest === 4, 'lengths');
   assert(playing.turn === 'host' && !playing.answers, 'hidden and host turn');
+  host.emit('draft', { word: 'no' });
+  const drafted = await guest.when((s) => s.drafts?.host === 'no', 'draft');
+  assert(drafted.turn === 'host', 'draft during host turn');
 
   host.emit('guess', { word: 'стоун' });
   const bad = await new Promise((resolve) => host.once('errorMsg', resolve));

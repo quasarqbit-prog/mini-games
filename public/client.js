@@ -22,6 +22,20 @@ if (!token) {
   sessionStorage.setItem(TOKEN_KEY, token);
 }
 
+const PROFILE_KEY = 'mg-profile';
+
+function loadProfile() {
+  try {
+    const data = JSON.parse(localStorage.getItem(PROFILE_KEY) || '{}');
+    return {
+      name: String(data.name || '').slice(0, 20),
+      avatar: String(data.avatar || ''),
+    };
+  } catch {
+    return { name: '', avatar: '' };
+  }
+}
+
 const socket = io({ auth: { token } });
 
 let connected = false;
@@ -32,6 +46,10 @@ let setupDraft = '';
 let stickChat = true;
 let focusKind = null;
 let popRole = null;
+let mobilePane = 'mine';
+let profile = loadProfile();
+let profileOpen = false;
+let profileDraft = null;
 
 function toast(text) {
   const el = document.createElement('div');
@@ -79,14 +97,91 @@ function roleName(role) {
   return role === 'host' ? 'Хост' : 'Друг';
 }
 
+function displayName(role) {
+  return state?.[role]?.name || roleName(role);
+}
+
+function avatarHtml(person, fallback) {
+  if (person?.avatar) {
+    return `<img class="avatar" src="${escapeHtml(person.avatar)}" alt="">`;
+  }
+  const letter = (person?.name || fallback || '?').trim().slice(0, 1).toUpperCase() || '?';
+  return `<span class="avatar letter">${escapeHtml(letter)}</span>`;
+}
+
+function renderHeader() {
+  headerSlot.innerHTML = `
+    <button type="button" class="profile-chip" data-act="profile">
+      ${avatarHtml(profile, 'Я')}
+      <span>${escapeHtml(profile.name || 'Профиль')}</span>
+    </button>`;
+}
+
+function renderModal() {
+  const modal = document.getElementById('modal');
+  if (!profileOpen || !profileDraft) {
+    modal.hidden = true;
+    modal.innerHTML = '';
+    return;
+  }
+  const preview = profileDraft.avatar
+    ? `<img class="avatar-preview" src="${escapeHtml(profileDraft.avatar)}" alt="">`
+    : `<span class="avatar-preview letter">${escapeHtml((profileDraft.name || 'Я').trim().slice(0, 1).toUpperCase() || 'Я')}</span>`;
+  modal.hidden = false;
+  modal.innerHTML = `
+    <div class="modal-card">
+      <h2>Профиль</h2>
+      <p class="note">Это имя и аватарка видны другу в комнате.</p>
+      <label class="avatar-pick">
+        ${preview}
+        <span>Выбрать аватарку</span>
+        <input class="avatar-file" type="file" accept="image/png,image/jpeg,image/webp">
+      </label>
+      <form data-act="save-profile">
+        <input class="profile-name" maxlength="20" placeholder="Имя" value="${escapeHtml(profileDraft.name)}">
+        <div class="lobby-actions">
+          <button class="btn" type="submit">Сохранить</button>
+          <button class="btn ghost" type="button" data-act="close-profile">Закрыть</button>
+        </div>
+      </form>
+      ${profileDraft.avatar ? '<button class="btn ghost wide" type="button" data-act="clear-avatar">Убрать аватарку</button>' : ''}
+    </div>`;
+}
+
+function resizeAvatar(file) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    const url = URL.createObjectURL(file);
+    image.onload = () => {
+      const size = 96;
+      const canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      const scale = Math.max(size / image.width, size / image.height);
+      const w = image.width * scale;
+      const h = image.height * scale;
+      ctx.drawImage(image, (size - w) / 2, (size - h) / 2, w, h);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL('image/jpeg', 0.72));
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('image'));
+    };
+    image.src = url;
+  });
+}
+
 function chatHtml(compact) {
   const lines = (state?.chat || []).map((msg) => {
     if (msg.from === 'system') {
       return `<div class="msg system">${escapeHtml(msg.text)}</div>`;
     }
     const mine = msg.from === state.you;
-    const who = roleName(msg.from);
-    return `<div class="msg${mine ? ' mine' : ''}"><b>${who}</b>${escapeHtml(msg.text)}</div>`;
+    const who = msg.name || displayName(msg.from);
+    const face = avatarHtml(state[msg.from] || { name: who }, who);
+    return `<div class="msg${mine ? ' mine' : ''}"><b class="person">${face}${escapeHtml(who)}</b>${escapeHtml(msg.text)}</div>`;
   }).join('');
   return `
     <section class="chat-panel" style="${compact ? '' : ''}">
@@ -134,12 +229,10 @@ function lobbyHtml() {
       </div>
       <div class="players">
         <div class="player online">
-          <strong>Хост</strong>
-          <span><i class="status-dot on"></i>${state.you === 'host' ? 'это ты' : 'в комнате'}</span>
+          <div class="person">${avatarHtml(state.host, 'Хост')}<div><strong>${escapeHtml(displayName('host'))}</strong><span><i class="status-dot on"></i>${state.you === 'host' ? 'это ты' : 'в комнате'}</span></div></div>
         </div>
         <div class="player${guestHere ? ' online' : ''}">
-          <strong>Друг</strong>
-          <span><i class="status-dot${guestHere ? ' on' : ''}"></i>${guestHere ? (state.you === 'guest' ? 'это ты' : 'в комнате') : 'ждём'}</span>
+          <div class="person">${state.guest ? avatarHtml(state.guest, 'Друг') : avatarHtml(null, '?')}<div><strong>${escapeHtml(state.guest?.name || 'Друг')}</strong><span><i class="status-dot${guestHere ? ' on' : ''}"></i>${guestHere ? (state.you === 'guest' ? 'это ты' : 'в комнате') : 'ждём'}</span></div></div>
         </div>
       </div>
       <div class="lobby-actions">
@@ -178,14 +271,14 @@ function boardHtml(role) {
 
   const mine = state.you === role;
   const canType = mine && state.phase === 'play' && state.turn === role;
-  if (canType) {
-    const chars = draft.slice(0, length).split('');
+  const showLive = !mine && state.phase === 'play' && state.turn === role;
+  if (canType || showLive || (!rows.length && state.phase === 'play')) {
+    const live = canType ? draft : (showLive ? (state.drafts?.[role] || '') : '');
+    const chars = live.slice(0, length).split('');
     while (chars.length < length) chars.push('');
     const tiles = chars.map((ch) => `<span class="tile${ch ? ' filled' : ''}">${escapeHtml(ch)}</span>`).join('');
-    rows.push(`<div class="row is-draft" style="grid-template-columns: repeat(${length}, minmax(0, 1fr))">${tiles}</div>`);
-  } else if (!rows.length && state.phase === 'play') {
-    const tiles = Array.from({ length }, () => '<span class="tile"></span>').join('');
-    rows.push(`<div class="row" style="grid-template-columns: repeat(${length}, minmax(0, 1fr))">${tiles}</div>`);
+    const kind = canType ? ' is-draft' : ' is-live';
+    rows.push(`<div class="row${kind}" style="grid-template-columns: repeat(${length}, minmax(0, 1fr))">${tiles}</div>`);
   }
 
   const legend = mine
@@ -235,7 +328,6 @@ function columnHtml(role) {
     }
   } else {
     body = boardHtml(role);
-    if (mine && state.phase === 'play') body += keyboardHtml();
     if (state.phase === 'done' && state.answers) {
       const secret = state.answers[role] || '';
       body += `<div class="result"><strong>${mine ? 'Тебе загадали' : 'Сопернику загадали'}</strong>${escapeHtml(secret.toUpperCase())}</div>`;
@@ -246,13 +338,16 @@ function columnHtml(role) {
     length ? `${length} букв` : (online ? 'в сети' : ''),
     online ? '' : 'нет связи',
   ].filter(Boolean).join(' · ');
+  const who = state[role] ? displayName(role) : roleName(role);
+  const keyboard = mine && state.phase === 'play' && state[role] ? keyboardHtml() : '';
   return `
-    <section class="side${state.phase === 'play' && state.turn === role ? ' is-turn' : ''}">
+    <section class="side${state.phase === 'play' && state.turn === role ? ' is-turn' : ''}${mine ? ' is-mine' : ' is-theirs'}">
       <div class="side-head">
-        <h2>${roleName(role)} ${mine ? '<span class="you-badge">ты</span>' : ''}</h2>
+        <h2 class="person">${state[role] ? avatarHtml(state[role], who) : ''}${escapeHtml(who)} ${mine ? '<span class="you-badge">ты</span>' : ''}</h2>
         <span><i class="status-dot${online ? ' on' : ''}"></i>${meta}</span>
       </div>
-      ${body}
+      <div class="side-body">${body}</div>
+      ${keyboard}
     </section>`;
 }
 
@@ -264,11 +359,11 @@ function gameHtml() {
       turnText = 'Твой ход';
       turnClass = ' you';
     } else {
-      turnText = state.turn === 'host' ? 'Ход хоста' : 'Ход друга';
+      turnText = `Ход: ${displayName(state.turn)}`;
     }
   } else if (state.phase === 'done') {
     if (state.winner === state.you) turnText = 'Ты победил';
-    else turnText = state.winner === 'host' ? 'Победил хост' : 'Победил друг';
+    else turnText = `Победил ${displayName(state.winner)}`;
     turnClass = ' you';
   }
 
@@ -281,6 +376,11 @@ function gameHtml() {
 
   return `
     <section class="game-screen">
+      <div class="mobile-tabs">
+        <button type="button" class="${mobilePane === 'mine' ? 'on' : ''}" data-act="pane" data-pane="mine">Свой вордл</button>
+        <button type="button" class="${mobilePane === 'theirs' ? 'on' : ''}" data-act="pane" data-pane="theirs">Вордл второго игрока</button>
+        <button type="button" class="${mobilePane === 'chat' ? 'on' : ''}" data-act="pane" data-pane="chat">Чат</button>
+      </div>
       <div class="game-top">
         <div class="pill">
           <span>Код</span>
@@ -293,7 +393,7 @@ function gameHtml() {
         </div>
         <div class="top-actions">${again}<button class="btn ghost" type="button" data-act="leave">Выйти</button></div>
       </div>
-      <div class="game-grid">
+      <div class="game-grid" data-pane="${mobilePane}">
         ${columnHtml('host')}
         ${chatHtml()}
         ${columnHtml('guest')}
@@ -303,16 +403,37 @@ function gameHtml() {
 
 function render() {
   captureForm();
-  if (!state) {
-    headerSlot.innerHTML = '';
-    view.innerHTML = homeHtml();
-    return;
-  }
-  headerSlot.innerHTML = state.phase === 'lobby'
-    ? ''
-    : '';
-  view.innerHTML = state.phase === 'lobby' ? lobbyHtml() : gameHtml();
+  document.body.classList.toggle('in-game', Boolean(state && state.phase !== 'lobby'));
+  renderHeader();
+  view.innerHTML = state ? (state.phase === 'lobby' ? lobbyHtml() : gameHtml()) : homeHtml();
   restoreForm();
+}
+
+function viewKey(snapshot) {
+  if (!snapshot) return '';
+  const other = snapshot.you === 'host' ? 'guest' : 'host';
+  return JSON.stringify({
+    code: snapshot.code,
+    phase: snapshot.phase,
+    turn: snapshot.turn,
+    you: snapshot.you,
+    boards: snapshot.boards,
+    chat: snapshot.chat,
+    winner: snapshot.winner,
+    host: snapshot.host,
+    guest: snapshot.guest,
+    youSetWord: snapshot.youSetWord,
+    opponentSetWord: snapshot.opponentSetWord,
+    lengths: snapshot.lengths,
+    script: snapshot.script,
+    answers: snapshot.answers,
+    theirDraft: snapshot.drafts ? snapshot.drafts[other] : '',
+  });
+}
+
+function syncDraft() {
+  if (!state || state.phase !== 'play' || state.turn !== state.you) return;
+  socket.emit('draft', { word: draft });
 }
 
 function currentLength() {
@@ -329,6 +450,7 @@ function typeLetter(letter) {
   if (!ok || draft.length >= max) return;
   draft += ch;
   paintDraft();
+  syncDraft();
 }
 
 function paintDraft() {
@@ -392,6 +514,27 @@ document.addEventListener('click', (event) => {
   if (act === 'backspace') {
     draft = draft.slice(0, -1);
     paintDraft();
+    syncDraft();
+  }
+  if (act === 'pane' && el.dataset.pane) {
+    mobilePane = el.dataset.pane;
+    render();
+  }
+  if (act === 'profile') {
+    profileDraft = { name: profile.name, avatar: profile.avatar };
+    profileOpen = true;
+    renderModal();
+  }
+  if (act === 'close-profile') {
+    profileOpen = false;
+    profileDraft = null;
+    renderModal();
+  }
+  if (act === 'clear-avatar' && profileDraft) {
+    const typed = document.querySelector('.profile-name');
+    if (typed) profileDraft.name = typed.value;
+    profileDraft.avatar = '';
+    renderModal();
   }
   if (act === 'submit-guess') submitGuess();
 });
@@ -418,6 +561,30 @@ document.addEventListener('submit', (event) => {
     chatDraft = '';
     input.value = '';
   }
+  if (act === 'save-profile') {
+    const name = form.querySelector('.profile-name').value.replace(/\s+/g, ' ').trim().slice(0, 20);
+    profile = { name, avatar: profileDraft?.avatar || '' };
+    localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+    socket.emit('profile', profile);
+    profileOpen = false;
+    profileDraft = null;
+    renderModal();
+    render();
+    toast('Профиль сохранён');
+  }
+});
+
+document.addEventListener('change', async (event) => {
+  const input = event.target.closest?.('.avatar-file');
+  if (!input?.files?.[0] || !profileDraft) return;
+  try {
+    profileDraft.avatar = await resizeAvatar(input.files[0]);
+    const typed = document.querySelector('.profile-name');
+    if (typed) profileDraft.name = typed.value;
+    renderModal();
+  } catch {
+    toast('Не удалось прочитать картинку');
+  }
 });
 
 document.addEventListener('keydown', (event) => {
@@ -433,6 +600,7 @@ document.addEventListener('keydown', (event) => {
     event.preventDefault();
     draft = draft.slice(0, -1);
     paintDraft();
+    syncDraft();
     return;
   }
   if (event.key.length === 1) typeLetter(event.key);
@@ -440,6 +608,7 @@ document.addEventListener('keydown', (event) => {
 
 socket.on('connect', () => {
   connected = true;
+  socket.emit('profile', profile);
   if (!state) render();
 });
 
@@ -456,17 +625,23 @@ socket.on('hello', (payload) => {
 });
 
 socket.on('state', (next) => {
+  const prev = state;
   popRole = null;
-  if (!state || state.code !== next.code || state.phase !== next.phase) {
+  if (!prev || prev.code !== next.code || prev.phase !== next.phase) {
     draft = '';
-  } else if (next.you && state.boards[next.you].length !== next.boards[next.you].length) {
+  } else if (next.you && prev.boards[next.you].length !== next.boards[next.you].length) {
     draft = '';
   }
-  if (state && state.code === next.code) {
-    if (next.boards.host.length > state.boards.host.length) popRole = 'host';
-    else if (next.boards.guest.length > state.boards.guest.length) popRole = 'guest';
+  if (prev && prev.code === next.code) {
+    if (next.boards.host.length > prev.boards.host.length) popRole = 'host';
+    else if (next.boards.guest.length > prev.boards.guest.length) popRole = 'guest';
   }
+  if (next.phase === 'play' && (!prev || prev.phase !== 'play' || prev.turn !== next.turn)) {
+    mobilePane = next.turn === next.you ? 'mine' : 'theirs';
+  }
+  if (next.phase === 'setup' && (!prev || prev.phase !== 'setup')) mobilePane = 'mine';
   state = next;
+  if (prev && viewKey(prev) === viewKey(next)) return;
   render();
 });
 
