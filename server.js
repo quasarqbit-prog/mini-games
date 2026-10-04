@@ -71,7 +71,93 @@ function emptyRoom(code) {
     chat: [],
     chatSeq: 1,
     drafts: { host: '', guest: '' },
+    settings: defaultSettings(),
+    fixedLength: null,
+    firstPlayer: 'host',
+    deadline: null,
   };
+}
+
+function defaultSettings() {
+  return {
+    lengthMode: 'own',
+    length: 5,
+    timerOn: false,
+    minutes: 1,
+    seconds: 0,
+    hidden: false,
+    firstTurn: 'host',
+  };
+}
+
+function sanitizeSettings(raw) {
+  const source = raw || {};
+  const lengthMode = ['own', 'exact', 'max', 'first'].includes(source.lengthMode) ? source.lengthMode : 'own';
+  const length = clampInt(source.length, 3, 16, 5);
+  const minutes = clampInt(source.minutes, 0, 5, 0);
+  const seconds = clampInt(source.seconds, 0, 60, 0);
+  const timerOn = Boolean(source.timerOn);
+  return {
+    lengthMode,
+    length,
+    timerOn,
+    minutes: timerOn && minutes === 0 && seconds === 0 ? 0 : minutes,
+    seconds: timerOn && minutes === 0 && seconds === 0 ? 1 : seconds,
+    hidden: Boolean(source.hidden),
+    firstTurn: source.firstTurn === 'random' ? 'random' : 'host',
+  };
+}
+
+function clampInt(value, min, max, fallback) {
+  const number = Number(value);
+  if (!Number.isInteger(number)) return fallback;
+  return Math.min(max, Math.max(min, number));
+}
+
+function timerMs(settings) {
+  return (settings.minutes * 60 + settings.seconds) * 1000;
+}
+
+function rollFirst(room) {
+  room.firstPlayer = room.settings.firstTurn === 'random'
+    ? (crypto.randomInt(2) ? 'guest' : 'host')
+    : 'host';
+}
+
+function beginTurn(room) {
+  room.drafts.host = '';
+  room.drafts.guest = '';
+  room.deadline = room.phase === 'play' && room.settings.timerOn
+    ? Date.now() + timerMs(room.settings)
+    : null;
+}
+
+function rulesText(room) {
+  const settings = room.settings;
+  const letters = {
+    own: 'от 3 до 16 букв, длину выбирает каждый',
+    exact: `ровно ${settings.length} букв`,
+    max: `от 3 до ${settings.length} букв`,
+    first: 'кто первый отправит слово, задаст длину второму',
+  }[settings.lengthMode];
+  const timer = settings.timerOn
+    ? ` На ход ${String(settings.minutes).padStart(2, '0')}:${String(settings.seconds).padStart(2, '0')}.`
+    : '';
+  return `Загадайте слово сопернику: ${letters}.${timer}`;
+}
+
+function lengthProblem(room, word) {
+  const settings = room.settings;
+  if (settings.lengthMode === 'exact' && word.length !== settings.length) {
+    return `Нужно ровно ${settings.length} букв`;
+  }
+  if (settings.lengthMode === 'max' && word.length > settings.length) {
+    return `Не больше ${settings.length} букв`;
+  }
+  if (settings.lengthMode === 'first' && room.fixedLength && word.length !== room.fixedLength) {
+    return `Первое слово задало длину: ${room.fixedLength} букв`;
+  }
+  return '';
 }
 
 function roleOf(room, token) {
@@ -155,10 +241,15 @@ function publicView(room, token) {
       guest: room.target.guest ? classifyWord(room.target.guest) : null,
     },
     boards: room.boards,
-    drafts: {
-      host: room.turn === 'host' ? room.drafts.host : '',
-      guest: room.turn === 'guest' ? room.drafts.guest : '',
-    },
+    drafts: room.settings.hidden
+      ? { host: '', guest: '' }
+      : {
+        host: room.turn === 'host' ? room.drafts.host : '',
+        guest: room.turn === 'guest' ? room.drafts.guest : '',
+      },
+    settings: room.settings,
+    fixedLength: room.fixedLength,
+    deadline: room.deadline,
     turn: room.turn,
     winner: room.winner,
     answers: room.phase === 'done'
@@ -203,8 +294,10 @@ function resetMatch(room) {
   room.submitted = { host: false, guest: false };
   room.boards = { host: [], guest: [] };
   room.drafts = { host: '', guest: '' };
-  room.turn = 'host';
+  room.fixedLength = null;
+  room.deadline = null;
   room.winner = null;
+  rollFirst(room);
 }
 
 io.use((socket, next) => {
@@ -267,8 +360,14 @@ io.on('connection', (socket) => {
     if (roleOf(room, socket.data.token) !== 'host') return fail(socket, 'Начать игру может только хост');
     if (room.phase !== 'lobby') return fail(socket, 'Игра уже началась');
     if (!room.guest?.connected) return fail(socket, 'Сначала пусть друг введёт код комнаты');
+    room.settings = sanitizeSettings(room.settings);
+    if (room.settings.timerOn && timerMs(room.settings) <= 0) {
+      return fail(socket, 'Укажи время на ход');
+    }
     room.phase = 'setup';
-    pushChat(room, 'system', 'Загадайте слово сопернику: от 3 до 16 букв.');
+    room.fixedLength = null;
+    rollFirst(room);
+    pushChat(room, 'system', rulesText(room));
     broadcast(room);
   });
 
@@ -283,13 +382,17 @@ io.on('connection', (socket) => {
     if (!script) {
       return fail(socket, 'Нужно от 3 до 16 букв: либо только русские, либо только английские');
     }
+    const problem = lengthProblem(room, clean);
+    if (problem) return fail(socket, problem);
+    if (room.settings.lengthMode === 'first' && !room.fixedLength) room.fixedLength = clean.length;
     const opponent = otherRole(role);
     room.target[opponent] = clean;
     room.submitted[role] = true;
     if (room.submitted.host && room.submitted.guest) {
       room.phase = 'play';
-      room.turn = 'host';
-      pushChat(room, 'system', 'Слова загаданы. Первый ход — у хоста.');
+      room.turn = room.firstPlayer || 'host';
+      beginTurn(room);
+      pushChat(room, 'system', `Слова загаданы. Первый ход — у ${playerLabel(room, room.turn)}.`);
     }
     broadcast(room);
   });
@@ -318,15 +421,28 @@ io.on('connection', (socket) => {
       pushChat(room, 'system', `${playerLabel(room, role)} угадал слово и победил.`);
     } else {
       room.turn = otherRole(role);
+      beginTurn(room);
     }
-    room.drafts.host = '';
-    room.drafts.guest = '';
+    if (room.phase === 'done') {
+      room.drafts.host = '';
+      room.drafts.guest = '';
+      room.deadline = null;
+    }
+    broadcast(room);
+  });
+
+  socket.on('settings', (raw) => {
+    const room = findByToken(socket.data.token);
+    if (!room) return fail(socket, 'Комната не найдена');
+    if (roleOf(room, socket.data.token) !== 'host') return fail(socket, 'Настройки меняет хост');
+    if (room.phase !== 'lobby') return fail(socket, 'Настройки можно менять только в лобби');
+    room.settings = sanitizeSettings(raw);
     broadcast(room);
   });
 
   socket.on('draft', ({ word } = {}) => {
     const room = findByToken(socket.data.token);
-    if (!room || room.phase !== 'play') return;
+    if (!room || room.phase !== 'play' || room.settings.hidden) return;
     const role = roleOf(room, socket.data.token);
     if (room.turn !== role || !room.target[role]) return;
     const secret = room.target[role];
@@ -402,6 +518,19 @@ io.on('connection', (socket) => {
     broadcast(room);
   });
 });
+
+setInterval(() => {
+  const now = Date.now();
+  for (const room of rooms.values()) {
+    if (room.phase === 'play' && room.deadline && now >= room.deadline) {
+      const skipped = room.turn;
+      room.turn = otherRole(skipped);
+      beginTurn(room);
+      pushChat(room, 'system', `Время вышло. Ход ${playerLabel(room, skipped)} пропущен.`);
+      broadcast(room);
+    }
+  }
+}, 400).unref();
 
 setInterval(() => {
   const now = Date.now();

@@ -60,6 +60,15 @@ async function main() {
   const joined = await guest.when((s) => s.you === 'guest' && s.guest?.connected, 'join');
   assert(joined.code === created.code, 'same room');
   await host.when((s) => s.guest?.connected, 'host sees guest');
+  host.emit('settings', {
+    lengthMode: 'exact', length: 4, timerOn: false, minutes: 0, seconds: 0, hidden: true, firstTurn: 'host',
+  });
+  const exact = await host.when((s) => s.settings?.lengthMode === 'exact' && s.settings.hidden, 'settings');
+  assert(exact.settings.length === 4, 'exact length');
+  host.emit('settings', {
+    lengthMode: 'own', length: 5, timerOn: false, minutes: 1, seconds: 0, hidden: false, firstTurn: 'host',
+  });
+  await host.when((s) => s.settings?.lengthMode === 'own' && !s.settings.hidden, 'settings reset');
   host.emit('profile', { name: 'Богдан', avatar: '' });
   const named = await host.when((s) => s.host?.name === 'Богдан', 'profile');
   assert(named.host.avatar === '', 'avatar empty');

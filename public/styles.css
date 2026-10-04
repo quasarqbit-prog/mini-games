@@ -214,7 +214,7 @@ button {
 }
 
 .lobby {
-  max-width: 560px;
+  max-width: 640px;
   margin: 12px auto 0;
 }
 
@@ -729,6 +729,53 @@ button {
 }
 
 .mobile-tabs { display: none; }
+.turn-confirm, .chat-note { display: none; }
+
+.rules { margin-top: 16px; display: flex; flex-direction: column; gap: 10px; }
+.rules h3 { margin: 0; font-family: Unbounded, Manrope, sans-serif; font-size: 16px; }
+.rule {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 12px;
+}
+.rule p { margin: 0 0 8px; }
+.seg { display: flex; flex-wrap: wrap; gap: 6px; }
+.seg button {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--cream);
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-weight: 800;
+}
+.seg button.on { background: var(--coral); color: #2a120c; border-color: transparent; }
+.num-line, .time-line { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.num {
+  width: 72px;
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #1a1511;
+  text-align: center;
+  font-weight: 800;
+}
+.clock { font-family: Unbounded, Manrope, sans-serif; font-size: 20px; letter-spacing: 0.08em; }
+.badge {
+  display: inline-flex;
+  min-width: 18px;
+  height: 18px;
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--coral);
+  color: #2a120c;
+  font-style: normal;
+  font-size: 11px;
+  align-items: center;
+  justify-content: center;
+}
+.mobile-tabs button.on .badge { background: #2a120c; color: var(--cream); }
 
 @media (max-width: 800px) {
   .mobile-tabs {
@@ -772,4 +819,33 @@ button {
 
   .top { padding: 12px; }
   #view { width: min(1120px, calc(100% - 16px)); }
+
+  .chat-note {
+    display: block;
+    width: 100%;
+    margin: 0 0 8px;
+    text-align: left;
+    border: 1px solid rgba(255, 107, 74, 0.45);
+    background: #3a241c;
+    color: var(--cream);
+    border-radius: 12px;
+    padding: 10px 12px;
+    font-weight: 700;
+  }
+
+  .turn-confirm {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 8px;
+    padding: 10px 12px;
+    border-radius: 14px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    flex-shrink: 0;
+  }
+
+  .turn-confirm p { margin: 0; line-height: 1.3; }
+  .turn-confirm .btn { flex: none; padding: 10px 14px; }
 }

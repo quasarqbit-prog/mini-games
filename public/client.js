@@ -47,6 +47,9 @@ let stickChat = true;
 let focusKind = null;
 let popRole = null;
 let mobilePane = 'mine';
+let pendingPane = null;
+let chatUnread = 0;
+let chatNotice = '';
 let profile = loadProfile();
 let profileOpen = false;
 let profileDraft = null;
@@ -57,6 +60,62 @@ function toast(text) {
   el.textContent = text;
   toasts.appendChild(el);
   setTimeout(() => el.remove(), 3200);
+}
+
+function copyCode(text) {
+  const done = (ok) => toast(ok ? 'Код скопирован' : 'Не удалось скопировать');
+  const fallback = () => {
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed';
+    area.style.top = '0';
+    area.style.left = '0';
+    area.style.opacity = '0';
+    document.body.appendChild(area);
+    area.focus();
+    area.select();
+    area.setSelectionRange(0, area.value.length);
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch { ok = false; }
+    area.remove();
+    done(ok);
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(() => done(true), fallback);
+    return;
+  }
+  fallback();
+}
+
+let audioCtx = null;
+function playChatSound() {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return;
+  if (!audioCtx) audioCtx = new Ctx();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  const now = audioCtx.currentTime;
+  const gain = audioCtx.createGain();
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.05, now + 0.02);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
+  gain.connect(audioCtx.destination);
+  const tone = audioCtx.createOscillator();
+  tone.type = 'sine';
+  tone.frequency.setValueAtTime(880, now);
+  tone.frequency.setValueAtTime(660, now + 0.09);
+  tone.connect(gain);
+  tone.start(now);
+  tone.stop(now + 0.24);
+}
+
+function pad2(n) {
+  return String(Number(n) || 0).padStart(2, '0');
+}
+
+function formatLeft(deadline) {
+  const total = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+  return `${pad2(Math.floor(total / 60))}:${pad2(total % 60)}`;
 }
 
 function escapeHtml(value) {
@@ -241,8 +300,100 @@ function lobbyHtml() {
           : `<button class="btn" type="button" disabled>Ждём, пока хост начнёт</button>`}
         <button class="btn ghost" type="button" data-act="leave">Выйти</button>
       </div>
+      ${rulesHtml()}
       ${chatHtml(true)}
     </section>`;
+}
+
+function lengthHint(settings) {
+  if (settings.lengthMode === 'exact') return 'Оба слова должны быть ровно этой длины.';
+  if (settings.lengthMode === 'max') return 'Слово может быть короче, но не длиннее этого числа.';
+  if (settings.lengthMode === 'first') return 'Первое отправленное слово задаёт длину второму игроку.';
+  return 'Ограничения нет: каждый выбирает длину сам, от 3 до 16 букв.';
+}
+
+function rulesSummary(settings) {
+  const letters = {
+    own: 'длина своя, 3–16',
+    exact: `ровно ${settings.length} букв`,
+    max: `до ${settings.length} букв`,
+    first: 'длина по первому слову',
+  }[settings.lengthMode];
+  const time = settings.timerOn ? `таймер ${pad2(settings.minutes)}:${pad2(settings.seconds)}` : 'без таймера';
+  const hidden = settings.hidden ? 'скрытый ввод' : 'ввод соперника виден';
+  const first = settings.firstTurn === 'random' ? 'первый ход случайный' : 'первый ход у хоста';
+  return `Буквы: ${letters}. ${time}. ${hidden}. ${first}.`;
+}
+
+function rulesHtml() {
+  const settings = state.settings;
+  if (state.you !== 'host') {
+    return `<section class="rules"><h3>Правила хоста</h3><p class="note">${escapeHtml(rulesSummary(settings))}</p></section>`;
+  }
+  const modeBtn = (value, label) => `<button type="button" class="${settings.lengthMode === value ? 'on' : ''}" data-act="setting" data-key="lengthMode" data-value="${value}">${label}</button>`;
+  const lengthPick = settings.lengthMode === 'exact' || settings.lengthMode === 'max'
+    ? `<label class="num-line">Букв <input class="num" data-setting-num="length" type="number" min="3" max="16" value="${settings.length}"></label>`
+    : '';
+  const timePick = settings.timerOn
+    ? `<div class="time-line">
+        <input class="num" data-setting-num="minutes" type="number" min="0" max="5" value="${settings.minutes}">
+        <span>:</span>
+        <input class="num" data-setting-num="seconds" type="number" min="0" max="60" value="${settings.seconds}">
+        <strong>${pad2(settings.minutes)}:${pad2(settings.seconds)}</strong>
+      </div>`
+    : '';
+  const onOff = (key, on) => `
+    <button type="button" class="${on ? 'on' : ''}" data-act="setting" data-key="${key}" data-value="1">Вкл</button>
+    <button type="button" class="${on ? '' : 'on'}" data-act="setting" data-key="${key}" data-value="0">Выкл</button>`;
+  return `
+    <section class="rules">
+      <h3>Настройки</h3>
+      <div class="rule">
+        <p>Количество букв</p>
+        <div class="seg">${modeBtn('own', 'Свой')}${modeBtn('exact', 'Ручной')}${modeBtn('max', 'Ручной-до')}${modeBtn('first', 'Первейший')}</div>
+        <p class="note">${escapeHtml(lengthHint(settings))}</p>
+        ${lengthPick}
+      </div>
+      <div class="rule">
+        <p>Ограничение по времени</p>
+        <div class="seg">${onOff('timerOn', settings.timerOn)}</div>
+        ${timePick}
+        <p class="note">Нужно успеть ввести слово, иначе ход пропускается. Максимум 5 минут и 60 секунд.</p>
+      </div>
+      <div class="rule">
+        <p>Скрытый режим</p>
+        <div class="seg">${onOff('hidden', settings.hidden)}</div>
+        <p class="note">Соперник не видит буквы, пока слово не отправлено.</p>
+      </div>
+      <div class="rule">
+        <p>Первый ход</p>
+        <div class="seg">
+          <button type="button" class="${settings.firstTurn === 'host' ? 'on' : ''}" data-act="setting" data-key="firstTurn" data-value="host">Хост</button>
+          <button type="button" class="${settings.firstTurn === 'random' ? 'on' : ''}" data-act="setting" data-key="firstTurn" data-value="random">Случайно</button>
+        </div>
+      </div>
+    </section>`;
+}
+
+function setupHint() {
+  const settings = state.settings;
+  if (!settings) return 'Загадай слово сопернику. От 3 до 16 букв, русские или английские.';
+  if (settings.lengthMode === 'exact') return `Загадай слово ровно из ${settings.length} букв.`;
+  if (settings.lengthMode === 'max') return `Загадай слово от 3 до ${settings.length} букв.`;
+  if (settings.lengthMode === 'first') {
+    return state.fixedLength
+      ? `Длина уже задана: ${state.fixedLength} букв.`
+      : 'Если ты отправишь слово первым, его длина станет обязательной для соперника.';
+  }
+  return 'Загадай слово сопернику. От 3 до 16 букв, русские или английские.';
+}
+
+function setupMax() {
+  const settings = state.settings;
+  if (!settings) return 16;
+  if (settings.lengthMode === 'exact' || settings.lengthMode === 'max') return settings.length;
+  if (settings.lengthMode === 'first' && state.fixedLength) return state.fixedLength;
+  return 16;
 }
 
 function keyRanks(board) {
@@ -271,7 +422,7 @@ function boardHtml(role) {
 
   const mine = state.you === role;
   const canType = mine && state.phase === 'play' && state.turn === role;
-  const showLive = !mine && state.phase === 'play' && state.turn === role;
+  const showLive = !mine && state.phase === 'play' && state.turn === role && !state.settings?.hidden;
   if (canType || showLive || (!rows.length && state.phase === 'play')) {
     const live = canType ? draft : (showLive ? (state.drafts?.[role] || '') : '');
     const chars = live.slice(0, length).split('');
@@ -317,8 +468,8 @@ function columnHtml(role) {
     if (mine && !state.youSetWord) {
       body = `
         <form class="setup-box" data-act="set-word">
-          <p>Загадай слово сопернику. От 3 до 16 букв, русские или английские.</p>
-          <input class="setup-input" maxlength="16" autocomplete="off" placeholder="Слово">
+          <p>${setupHint()}</p>
+          <input class="setup-input" maxlength="${setupMax()}" autocomplete="off" placeholder="Слово">
           <button class="btn wide" type="submit">Загадать</button>
         </form>`;
     } else if (mine) {
@@ -374,13 +525,25 @@ function gameHtml() {
     ? '<p class="note">Ждём, пока хост начнёт новый раунд</p>'
     : '';
 
+  const chatLabel = chatUnread ? `Чат <i class="badge">${chatUnread}</i>` : 'Чат';
+  const chatNote = chatUnread && mobilePane !== 'chat'
+    ? `<button type="button" class="chat-note" data-act="pane" data-pane="chat">${escapeHtml(chatNotice || 'Новое сообщение в чате')}</button>`
+    : '';
+  const confirm = pendingPane
+    ? `<div class="turn-confirm"><p>${pendingPane === 'mine' ? 'Твой ход. Перейти к своему вордлу?' : 'Ход соперника. Перейти и посмотреть?'}</p><button type="button" class="btn" data-act="confirm-pane">Перейти</button></div>`
+    : '';
+  const clock = state.phase === 'play' && state.settings?.timerOn && state.deadline
+    ? `<div class="clock" data-deadline="${state.deadline}">${formatLeft(state.deadline)}</div>`
+    : '';
+
   return `
     <section class="game-screen">
       <div class="mobile-tabs">
         <button type="button" class="${mobilePane === 'mine' ? 'on' : ''}" data-act="pane" data-pane="mine">Свой вордл</button>
         <button type="button" class="${mobilePane === 'theirs' ? 'on' : ''}" data-act="pane" data-pane="theirs">Вордл второго игрока</button>
-        <button type="button" class="${mobilePane === 'chat' ? 'on' : ''}" data-act="pane" data-pane="chat">Чат</button>
+        <button type="button" class="${mobilePane === 'chat' ? 'on' : ''}" data-act="pane" data-pane="chat">${chatLabel}</button>
       </div>
+      ${chatNote}
       <div class="game-top">
         <div class="pill">
           <span>Код</span>
@@ -389,6 +552,7 @@ function gameHtml() {
         </div>
         <div class="turn-wrap">
           <div class="turn${turnClass}">${turnText}</div>
+          ${clock}
           ${wait}
         </div>
         <div class="top-actions">${again}<button class="btn ghost" type="button" data-act="leave">Выйти</button></div>
@@ -398,6 +562,7 @@ function gameHtml() {
         ${chatHtml()}
         ${columnHtml('guest')}
       </div>
+      ${confirm}
     </section>`;
 }
 
@@ -427,12 +592,15 @@ function viewKey(snapshot) {
     lengths: snapshot.lengths,
     script: snapshot.script,
     answers: snapshot.answers,
+    settings: snapshot.settings,
+    fixedLength: snapshot.fixedLength,
+    deadline: snapshot.deadline,
     theirDraft: snapshot.drafts ? snapshot.drafts[other] : '',
   });
 }
 
 function syncDraft() {
-  if (!state || state.phase !== 'play' || state.turn !== state.you) return;
+  if (!state || state.phase !== 'play' || state.turn !== state.you || state.settings?.hidden) return;
   socket.emit('draft', { word: draft });
 }
 
@@ -501,10 +669,7 @@ document.addEventListener('click', (event) => {
     return;
   }
   if (act === 'copy' && state) {
-    navigator.clipboard.writeText(state.code).then(
-      () => toast('Код скопирован'),
-      () => toast('Не удалось скопировать'),
-    );
+    copyCode(state.code);
     return;
   }
   if (act === 'start') socket.emit('start');
@@ -518,7 +683,23 @@ document.addEventListener('click', (event) => {
   }
   if (act === 'pane' && el.dataset.pane) {
     mobilePane = el.dataset.pane;
+    if (mobilePane === 'chat') {
+      chatUnread = 0;
+      chatNotice = '';
+    }
+    if (pendingPane === mobilePane) pendingPane = null;
     render();
+  }
+  if (act === 'confirm-pane' && pendingPane) {
+    mobilePane = pendingPane;
+    pendingPane = null;
+    render();
+  }
+  if (act === 'setting') {
+    const key = el.dataset.key;
+    let value = el.dataset.value;
+    if (key === 'timerOn' || key === 'hidden') value = value === '1';
+    socket.emit('settings', { ...state.settings, [key]: value });
   }
   if (act === 'profile') {
     profileDraft = { name: profile.name, avatar: profile.avatar };
@@ -575,6 +756,10 @@ document.addEventListener('submit', (event) => {
 });
 
 document.addEventListener('change', async (event) => {
+  const setting = event.target.closest?.('[data-setting-num]');
+  if (setting && state?.you === 'host' && state.phase === 'lobby') {
+    socket.emit('settings', { ...state.settings, [setting.dataset.settingNum]: Number(setting.value) });
+  }
   const input = event.target.closest?.('.avatar-file');
   if (!input?.files?.[0] || !profileDraft) return;
   try {
@@ -635,10 +820,22 @@ socket.on('state', (next) => {
   if (prev && prev.code === next.code) {
     if (next.boards.host.length > prev.boards.host.length) popRole = 'host';
     else if (next.boards.guest.length > prev.boards.guest.length) popRole = 'guest';
+    const prevLast = prev.chat.at(-1)?.id || 0;
+    const fresh = next.chat.filter((msg) => msg.id > prevLast && msg.from !== 'system' && msg.from !== next.you);
+    if (fresh.length) {
+      playChatSound();
+      if (window.matchMedia('(max-width: 800px)').matches && mobilePane !== 'chat') {
+        chatUnread += fresh.length;
+        const last = fresh.at(-1);
+        chatNotice = `${last.name || 'Сообщение'}: ${last.text}`;
+      }
+    }
   }
   if (next.phase === 'play' && (!prev || prev.phase !== 'play' || prev.turn !== next.turn)) {
-    mobilePane = next.turn === next.you ? 'mine' : 'theirs';
+    const target = next.turn === next.you ? 'mine' : 'theirs';
+    pendingPane = mobilePane === target ? null : target;
   }
+  if (next.phase !== 'play') pendingPane = null;
   if (next.phase === 'setup' && (!prev || prev.phase !== 'setup')) mobilePane = 'mine';
   state = next;
   if (prev && viewKey(prev) === viewKey(next)) return;
@@ -648,6 +845,9 @@ socket.on('state', (next) => {
 socket.on('closed', ({ message }) => {
   state = null;
   draft = '';
+  pendingPane = null;
+  chatUnread = 0;
+  chatNotice = '';
   render();
   toast(message || 'Комната закрыта');
 });
@@ -659,3 +859,16 @@ socket.on('errorMsg', (payload) => {
 });
 
 render();
+
+setInterval(() => {
+  document.querySelectorAll('.clock').forEach((el) => {
+    el.textContent = formatLeft(Number(el.dataset.deadline));
+  });
+}, 250);
+
+document.addEventListener('pointerdown', () => {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return;
+  if (!audioCtx) audioCtx = new Ctx();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+});
