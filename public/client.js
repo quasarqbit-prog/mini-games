@@ -760,6 +760,7 @@ function render() {
     return;
   }
   captureForm();
+  document.body.classList.remove('in-cinema');
   document.body.classList.toggle('in-game', Boolean(state && state.phase !== 'lobby'));
   renderHeader();
   view.innerHTML = state ? (state.phase === 'lobby' ? lobbyHtml() : gameHtml()) : homeHtml();
@@ -924,6 +925,11 @@ document.addEventListener('click', (event) => {
   if (act === 'screen-start') startScreenShare();
   if (act === 'screen-stop') stopScreenShare();
   if (act === 'give-host') socket.emit('cinema:host', { id: el.dataset.id });
+  if (act === 'hud-toggle') toggleHud(el);
+  if (act === 'hud-pause') hudTogglePause();
+  if (act === 'hud-seek') hudSeek(Number(el.dataset.by) || 0);
+  if (act === 'stage-full') toggleCinemaFull();
+  if (act === 'fs-chat') document.querySelector('.cinema')?.classList.toggle('side-open');
   if (act === 'emoji-open') {
     emojiOpen = !emojiOpen;
     if (emojiOpen) pickerTab = pickerTab || 'emoji';
@@ -1009,6 +1015,11 @@ document.addEventListener('input', (event) => {
     localStorage.setItem(CINEMA_MUTE_KEY, value === 0 ? '1' : '0');
     applyCinemaVolume();
   }
+  if (target?.classList?.contains('hud-scrub')) {
+    hudScrub = true;
+    const label = document.querySelector('.hud-now');
+    if (label) label.textContent = formatClock(Number(target.value) / 10);
+  }
   if (target?.classList?.contains('emoji-search')) {
     emojiQuery = target.value;
     paintEmojiGrid();
@@ -1016,6 +1027,12 @@ document.addEventListener('input', (event) => {
 });
 
 document.addEventListener('change', async (event) => {
+  if (event.target?.classList?.contains('hud-scrub')) {
+    hudScrub = false;
+    if (state?.youHost && state.video?.id && !state.video.live && !state.screen) {
+      socket.emit('cinema:seek', { time: Number(event.target.value) / 10 });
+    }
+  }
   if (event.target?.classList?.contains('cinema-quality')) {
     localStorage.setItem(CINEMA_QUAL_KEY, event.target.value);
     applyCinemaQuality();
@@ -1406,6 +1423,7 @@ let cinemaUnread = 0;
 let cinemaUrlDraft = '';
 let cinemaMounted = '';
 let cinemaClockOffset = 0;
+let hudScrub = false;
 let ytPlayer = null;
 let ytReady = null;
 let twitchPlayer = null;
@@ -1470,23 +1488,126 @@ function cinemaPeople() {
   return rows || '<li class="note">Пока никого нет</li>';
 }
 
+function hostRoomCard() {
+  if (!state?.youHost) return '';
+  return `
+    <div class="room-card">
+      <div class="room-code">
+        <span>Код</span>
+        <strong>${escapeHtml(state.code)}</strong>
+      </div>
+      <button class="btn" type="button" data-act="copy-link">Скопировать ссылку</button>
+      ${state.video?.id && !state.screen ? `<form data-act="cinema-url">
+        <input class="cinema-url" value="${escapeHtml(cinemaUrlDraft)}" placeholder="Другая ссылка" autocomplete="off">
+        <button class="btn" type="submit">Сменить</button>
+      </form>` : ''}
+      ${state.screen
+        ? '<button class="btn ghost wide" type="button" data-act="screen-stop">Остановить демонстрацию</button>'
+        : '<button class="btn ghost wide" type="button" data-act="screen-start">Демонстрация экрана</button>'}
+    </div>`;
+}
+
+function formatClock(seconds) {
+  const whole = Math.max(0, Math.floor(Number(seconds) || 0));
+  const hours = Math.floor(whole / 3600);
+  const mins = Math.floor((whole % 3600) / 60);
+  const secs = whole % 60;
+  if (hours > 0) return `${hours}:${pad2(mins)}:${pad2(secs)}`;
+  return `${mins}:${pad2(secs)}`;
+}
+
+function coarsePointer() {
+  return window.matchMedia('(hover: none), (pointer: coarse)').matches;
+}
+
+function toggleHud(el) {
+  if (!coarsePointer()) return;
+  el.closest('.stage-frame')?.classList.toggle('hud-on');
+}
+
+function hudTogglePause() {
+  if (!state?.video?.id || state.video.live || state.video.clip || state.screen) return;
+  const time = playbackAdapter()?.time?.() || mediaClock(state.video);
+  if (state.video.playing || state.video.pauseAt != null) socket.emit('cinema:pause', { time });
+  else socket.emit('cinema:play');
+}
+
+function hudSeek(delta) {
+  if (!state?.youHost || !state.video?.id || state.video.live || state.video.clip || state.screen) return;
+  const time = playbackAdapter()?.time?.() || mediaClock(state.video);
+  socket.emit('cinema:seek', { time: Math.max(0, time + delta) });
+}
+
+function toggleCinemaFull() {
+  const root = document.querySelector('.cinema');
+  if (!root) return;
+  const active = document.fullscreenElement || document.webkitFullscreenElement;
+  if (active) {
+    const exit = document.exitFullscreen || document.webkitExitFullscreen;
+    if (exit) exit.call(document);
+    return;
+  }
+  const ask = root.requestFullscreen || root.webkitRequestFullscreen;
+  if (!ask) {
+    toast('Этот браузер не открывает полный экран');
+    return;
+  }
+  Promise.resolve(ask.call(root)).catch(() => toast('Не удалось открыть на весь экран'));
+}
+
+function mediaDuration() {
+  try {
+    const youtube = ytPlayer?.getDuration?.();
+    if (youtube > 0) return youtube;
+  } catch { /* player is still starting */ }
+  try {
+    const twitch = twitchPlayer?.getDuration?.();
+    if (twitch > 0) return twitch;
+  } catch { /* player is still starting */ }
+  const node = document.querySelector('.cloud-video');
+  if (node && Number.isFinite(node.duration) && node.duration > 0) return node.duration;
+  return 0;
+}
+
+function paintHud() {
+  try {
+  const hud = document.querySelector('.stage-hud');
+  if (!hud || !state?.video?.id || state.screen || state.video.live || state.video.clip) return;
+  const playing = Boolean(state.video.playing && state.video.pauseAt == null);
+  hud.querySelector('.hud-pause')?.classList.toggle('is-paused', !playing);
+  const time = playbackAdapter()?.time?.() || mediaClock(state.video);
+  const duration = mediaDuration();
+  const now = hud.querySelector('.hud-now');
+  const end = hud.querySelector('.hud-dur');
+  if (now && !hudScrub) now.textContent = formatClock(time);
+  if (end) end.textContent = duration ? formatClock(duration) : '–:––';
+  const scrub = hud.querySelector('.hud-scrub');
+  if (scrub && !hudScrub && duration > 0) {
+    scrub.max = String(Math.round(duration * 10));
+    scrub.value = String(Math.round(Math.min(duration, Math.max(0, time)) * 10));
+  }
+  } catch { /* player is still starting */ }
+}
+
 function cinemaHtml() {
   const host = state.youHost;
   const volume = savedVolume();
   const quality = savedQuality();
   const badge = cinemaUnread && cinemaTab !== 'chat' ? `<i class="badge">${cinemaUnread}</i>` : '';
+  const hasMedia = Boolean(state.screen || state.video?.id);
+  const timeline = Boolean(state.video?.id && !state.video.live && !state.video.clip && !state.screen);
+  const showQuality = state.video?.id && !state.screen && !state.video.clip && (state.video.kind === 'youtube' || state.video.kind === 'twitch' || !state.video.kind);
+  const showVolume = state.screen || (state.video?.id && !state.video.clip);
   let stage = '';
   if (state.screen) {
-    stage = `
-      <video class="screen-video" autoplay playsinline></video>
-      <p class="stage-caption">${host ? 'Ты показываешь экран' : 'Демонстрация экрана хоста'}</p>`;
+    stage = '<video class="screen-video" autoplay playsinline></video>';
   } else if (state.video?.kind === 'twitch' && state.video.clip) {
     const parent = encodeURIComponent(location.hostname);
-    stage = `<iframe class="twitch-clip" src="https://clips.twitch.tv/embed?clip=${encodeURIComponent(state.video.id)}&parent=${parent}&autoplay=true" allowfullscreen></iframe>`;
+    stage = `<iframe class="twitch-clip" src="https://clips.twitch.tv/embed?clip=${encodeURIComponent(state.video.id)}&parent=${parent}&autoplay=true"></iframe>`;
   } else if (state.video?.kind === 'twitch' && state.video.id) {
     stage = '<div id="tw-player"></div><p class="stage-error" hidden></p>';
   } else if (state.video?.kind === 'file' && state.video.id) {
-    stage = '<video class="cloud-video" playsinline controls></video><p class="stage-error" hidden></p>';
+    stage = '<video class="cloud-video" playsinline></video><p class="stage-error" hidden></p>';
   } else if (state.video?.id) {
     stage = '<div id="yt-player"></div><p class="stage-error" hidden></p>';
   } else {
@@ -1496,54 +1617,68 @@ function cinemaHtml() {
         ${host ? `<form data-act="cinema-url">
           <input class="cinema-url" value="${escapeHtml(cinemaUrlDraft)}" placeholder="YouTube, Twitch, Drive или Dropbox" autocomplete="off">
           <button class="btn" type="submit">Смотреть вместе</button>
-        </form>` : ''}
+        </form>
+        <button class="btn ghost" type="button" data-act="screen-start">Демонстрация экрана</button>` : ''}
       </div>`;
   }
-  const showQuality = state.video?.id && !state.screen && !state.video.clip && (state.video.kind === 'youtube' || state.video.kind === 'twitch' || !state.video.kind);
-  const tools = (state.screen || (state.video?.id && !state.video.clip)) ? `
-    <div class="cinema-tools">
-      <label>Громкость <input class="cinema-volume" type="range" min="0" max="100" value="${volume}"></label>
-      ${showQuality ? `<label>Качество
-        <select class="cinema-quality">
-          ${[['auto', 'Авто'], ['small', '240p'], ['medium', '360p'], ['large', '480p'], ['hd720', '720p'], ['hd1080', '1080p']].map(([item, label]) => `<option value="${item}" ${item === quality ? 'selected' : ''}>${label}</option>`).join('')}
-        </select>
-      </label>` : ''}
-    </div>` : '';
-  const hostBar = host ? `
-    <div class="host-bar">
-      ${state.video?.id && !state.screen ? `<form data-act="cinema-url">
-        <input class="cinema-url" value="${escapeHtml(cinemaUrlDraft)}" placeholder="Другая ссылка" autocomplete="off">
-        <button class="btn" type="submit">Сменить</button>
-      </form>` : ''}
-      ${state.screen
-        ? '<button class="btn ghost" type="button" data-act="screen-stop">Остановить демонстрацию</button>'
-        : '<button class="btn ghost" type="button" data-act="screen-start">Демонстрация экрана</button>'}
+  const hud = hasMedia ? `
+    <button class="stage-shield" type="button" data-act="hud-toggle" aria-label="Управление"></button>
+    <div class="stage-hud">
+      <div class="hud-top">
+        <div class="hud-audio">
+          ${showQuality ? `<select class="cinema-quality" aria-label="Качество">
+            ${[['auto', 'Авто'], ['small', '240p'], ['medium', '360p'], ['large', '480p'], ['hd720', '720p'], ['hd1080', '1080p']].map(([item, label]) => `<option value="${item}" ${item === quality ? 'selected' : ''}>${label}</option>`).join('')}
+          </select>` : ''}
+          ${showVolume ? `<label class="hud-volume"><span>Громкость</span><input class="cinema-volume" type="range" min="0" max="100" value="${volume}"></label>` : ''}
+        </div>
+        <button class="hud-btn hud-fs" type="button" data-act="stage-full" aria-label="На весь экран">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 9V4h5v2H6v3H4zm10-5h5v5h-2V6h-3V4zM4 15h2v3h3v2H4v-5zm14 3h-3v2h5v-5h-2v3z"/></svg>
+        </button>
+      </div>
+      ${timeline ? `<div class="hud-bottom">
+        <div class="hud-actions">
+          <button class="hud-btn hud-pause" type="button" data-act="hud-pause" aria-label="Пауза">
+            <svg class="icon-pause" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>
+            <svg class="icon-play" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+          </button>
+          ${host ? `<button class="hud-btn" type="button" data-act="hud-seek" data-by="-5" aria-label="Назад на 5 секунд">−5</button>
+          <button class="hud-btn" type="button" data-act="hud-seek" data-by="5" aria-label="Вперёд на 5 секунд">+5</button>` : ''}
+        </div>
+        <div class="hud-line">
+          <span class="hud-now">0:00</span>
+          <input class="hud-scrub" type="range" min="0" max="1000" value="0" aria-label="Таймлайн" ${host ? '' : 'disabled'}>
+          <span class="hud-dur">–:––</span>
+        </div>
+      </div>` : ''}
     </div>` : '';
   return `
     <section class="cinema">
       <div class="stage">
-        <div class="stage-top">
-          <div class="pill">
-            <span>Код</span>
-            <strong>${escapeHtml(state.code)}</strong>
-            <button class="btn" type="button" data-act="copy-link">Ссылка</button>
-          </div>
-          <button class="btn ghost" type="button" data-act="leave">Выйти</button>
-        </div>
-        <div class="stage-frame">${stage}</div>
-        ${tools}
-        ${hostBar}
+        <div class="stage-frame">${stage}${hud}</div>
+        <div class="fs-edge" aria-hidden="true"></div>
+        <button class="fs-toggle" type="button" data-act="fs-chat" aria-label="Чат">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M15.4 5.4 9.8 11l5.6 5.6L14 18l-7-7 7-7z"/></svg>
+        </button>
       </div>
       <aside class="cinema-side">
-        <div class="cinema-tabs">
-          <button type="button" class="${cinemaTab === 'chat' ? 'on' : ''}" data-act="cinema-tab" data-tab="chat">Чат ${badge}</button>
-          <button type="button" class="${cinemaTab === 'people' ? 'on' : ''}" data-act="cinema-tab" data-tab="people">Зрители</button>
+        <div class="cinema-head">
+          <div class="cinema-tabs">
+            <button type="button" class="${cinemaTab === 'chat' ? 'on' : ''}" data-act="cinema-tab" data-tab="chat">Чат ${badge}</button>
+            <button type="button" class="${cinemaTab === 'people' ? 'on' : ''}" data-act="cinema-tab" data-tab="people">Зрители</button>
+          </div>
+          <div class="cinema-head-actions">
+            <button type="button" class="profile-chip" data-act="profile">${avatarHtml(profile, 'Я')}</button>
+            <button class="btn ghost" type="button" data-act="leave">Выйти</button>
+          </div>
         </div>
         <div class="cinema-chat" ${cinemaTab === 'chat' ? '' : 'hidden'}>
           <div class="chat-log cinema-log">${cinemaMessages()}</div>
           ${chatComposer()}
         </div>
-        <ul class="cinema-people" ${cinemaTab === 'people' ? '' : 'hidden'}>${cinemaPeople()}</ul>
+        <div class="cinema-people-pane" ${cinemaTab === 'people' ? '' : 'hidden'}>
+          ${hostRoomCard()}
+          <ul class="cinema-people">${cinemaPeople()}</ul>
+        </div>
       </aside>
     </section>`;
 }
@@ -1556,10 +1691,9 @@ function patchCinemaSide() {
     if (stick) chat.scrollTop = chat.scrollHeight;
   }
   const people = document.querySelector('.cinema-people');
-  if (people) {
-    people.innerHTML = cinemaPeople();
-    people.hidden = cinemaTab !== 'people';
-  }
+  if (people) people.innerHTML = cinemaPeople();
+  const peoplePane = document.querySelector('.cinema-people-pane');
+  if (peoplePane) peoplePane.hidden = cinemaTab !== 'people';
   const chatPane = document.querySelector('.cinema-chat');
   if (chatPane) chatPane.hidden = cinemaTab !== 'chat';
   document.querySelectorAll('[data-act="cinema-tab"]').forEach((button) => {
@@ -1574,7 +1708,7 @@ function patchCinemaSide() {
 
 function renderCinema() {
   const key = cinemaStructure(state);
-  document.body.classList.add('in-game');
+  document.body.classList.add('in-game', 'in-cinema');
   if (key !== cinemaMounted || !document.querySelector('.cinema')) {
     cinemaMounted = key;
     captureForm();
@@ -1660,8 +1794,12 @@ function mountCinemaStage() {
       host: 'https://www.youtube.com',
       playerVars: {
         autoplay: 1,
+        controls: 0,
+        disablekb: 1,
+        fs: 0,
         rel: 0,
         modestbranding: 1,
+        iv_load_policy: 3,
         playsinline: 1,
         origin: location.origin,
       },
@@ -1722,6 +1860,7 @@ function mountTwitch() {
       height: '100%',
       parent: [location.hostname],
       autoplay: true,
+      controls: false,
     };
     if (state.video.live) options.channel = state.video.id;
     else options.video = state.video.id;
@@ -2080,4 +2219,9 @@ socket.on('cinema:screen-off', () => {
 
 setInterval(() => {
   if (state?.game === 'cinema' && !state.screen) syncYouTube(false);
+  if (state?.game === 'cinema') paintHud();
 }, 500);
+
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement) document.querySelector('.cinema')?.classList.remove('side-open');
+});
