@@ -1086,51 +1086,6 @@ io.on('connection', (socket) => {
     broadcast(room);
   });
 
-  socket.on('cinema:screen', ({ start } = {}) => {
-    const found = requireCinema(socket);
-    if (!found) return fail(socket, 'Комната не найдена');
-    const { room, member } = found;
-    if (!member.host) return fail(socket, 'Демонстрация доступна только хосту');
-    if (start) {
-      if (room.video.id) room.video = blankVideo();
-      if (!room.screen) {
-        room.screen = true;
-        pushChat(room, 'system', `${cinemaName(member)} начал демонстрацию экрана.`);
-      }
-      broadcast(room);
-      return;
-    }
-    if (room.screen) endScreen(room, 'Демонстрация экрана закончилась.');
-    broadcast(room);
-  });
-
-  socket.on('cinema:watch', () => {
-    const found = requireCinema(socket);
-    if (!found || !found.room.screen || found.member.host) return;
-    const host = found.room.members.find((item) => item.host && item.connected);
-    if (!host?.socketId) return;
-    io.to(host.socketId).emit('cinema:viewer', { id: socket.id });
-  });
-
-  socket.on('cinema:signal', (payload = {}) => {
-    const found = requireCinema(socket);
-    if (!found) return;
-    const { room } = found;
-    let targetId = String(payload.to || '');
-    if (!targetId) {
-      const host = room.members.find((item) => item.host && item.connected);
-      targetId = host?.socketId || '';
-    }
-    const known = room.members.some((item) => item.socketId === targetId && item.connected);
-    if (!known || targetId === socket.id) return;
-    const description = payload.description && typeof payload.description.type === 'string'
-      ? { type: payload.description.type, sdp: String(payload.description.sdp || '').slice(0, 100000) }
-      : null;
-    const candidate = payload.candidate && typeof payload.candidate === 'object' ? payload.candidate : null;
-    if (!description && !candidate) return;
-    io.to(targetId).emit('cinema:signal', { from: socket.id, description, candidate });
-  });
-
   socket.on('leave', () => {
     const room = findByToken(socket.data.token);
     if (!room) {

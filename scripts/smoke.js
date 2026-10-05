@@ -185,9 +185,6 @@ async function main() {
   cinemaHost.emit('cinema:host', { id: guestId });
   const passed = await cinemaGuest.when((s) => s.youHost, 'host passed');
   assert(passed.members.some((member) => member.you && member.host), 'guest is host');
-  cinemaGuest.emit('cinema:screen', { start: true });
-  const sharing = await cinemaHost.when((s) => s.screen && !s.video.id, 'screen');
-  assert(sharing.chat.some((msg) => /демонстрацию/.test(msg.text)), 'screen notice');
   cinemaGuest.emit('chat', { text: '<b>привет</b>' });
   const said = await cinemaHost.when((s) => s.chat.some((msg) => msg.text.includes('привет')), 'cinema chat');
   assert(said.chat.some((msg) => msg.text === '<b>привет</b>' && msg.at), 'chat keeps text and time');
@@ -195,8 +192,6 @@ async function main() {
   cinemaGuest.emit('chat', { text: 'ответ', reply: { name: 'Богдан', text: 'цитата' } });
   const replied = await cinemaHost.when((s) => s.chat.some((msg) => msg.reply && msg.reply.text === 'цитата' && msg.text === 'ответ'), 'reply');
   assert(replied.chat.some((msg) => msg.reply && msg.reply.name === 'Богдан'), 'reply name');
-  cinemaGuest.emit('cinema:screen', { start: false });
-  await cinemaHost.when((s) => !s.screen, 'screen stopped');
   cinemaGuest.emit('cinema:video', { url: 'https://www.twitch.tv/riotgames' });
   await cinemaHost.when((s) => s.video?.kind === 'twitch' && s.video.live && s.video.id === 'riotgames', 'twitch');
   cinemaGuest.emit('cinema:pause', { time: 4 });

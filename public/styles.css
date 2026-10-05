@@ -1387,6 +1387,8 @@ body.in-cinema #view {
 }
 .hud-scrub:disabled { opacity: 1; }
 .hud-fs { margin-left: auto; flex: none; }
+.hud-cc { width: auto; padding: 0 10px; font-size: 13px; letter-spacing: 0.04em; }
+.hud-cc.on { background: var(--coral); color: #2a120c; }
 
 .fs-edge, .fs-toggle, .fs-float, .soft-keys { display: none; }
 
@@ -1450,6 +1452,19 @@ body.in-cinema #view {
   background: rgba(20, 16, 14, 0.72);
   color: var(--cream);
   transform: translateY(-50%);
+  transition: transform .2s ease;
+}
+.cinema:fullscreen.side-open .fs-toggle,
+.cinema:-webkit-full-screen.side-open .fs-toggle,
+.cinema:fullscreen:has(.cinema-side:hover) .fs-toggle,
+.cinema:-webkit-full-screen:has(.cinema-side:hover) .fs-toggle,
+.cinema:fullscreen:has(.fs-edge:hover) .fs-toggle,
+.cinema:-webkit-full-screen:has(.fs-edge:hover) .fs-toggle {
+  transform: translate(calc(-1 * min(380px, 88vw)), -50%);
+}
+.cinema:fullscreen.keys-open .fs-toggle,
+.cinema:-webkit-full-screen.keys-open .fs-toggle {
+  transform: translate(calc(-1 * min(340px, 46vw)), -50%);
 }
 .fs-toggle svg { width: 22px; height: 22px; }
 
@@ -1504,6 +1519,7 @@ body.in-cinema #view {
 }
 .soft-keys button.on { background: rgba(255, 255, 255, 0.38); color: #2a120c; }
 .soft-space { flex: 2.4; }
+.soft-close { flex: 1.5; font-size: 13px; }
 
 .cinema:fullscreen,
 .cinema:-webkit-full-screen {

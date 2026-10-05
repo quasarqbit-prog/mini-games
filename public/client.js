@@ -72,11 +72,8 @@ let profileDraft = null;
 let stickers = loadStickers();
 let replyDraft = null;
 let emojiOpen = false;
-let emojiQuery = '';
-let emojiCat = 0;
 let pickerTab = 'emoji';
 let stickerMenuId = '';
-let emojiPack = null;
 
 function toast(text) {
   const el = document.createElement('div');
@@ -922,9 +919,11 @@ document.addEventListener('click', (event) => {
     if (cinemaTab === 'chat') cinemaUnread = 0;
     patchCinemaSide();
   }
-  if (act === 'screen-start') startScreenShare();
-  if (act === 'screen-stop') stopScreenShare();
   if (act === 'give-host') socket.emit('cinema:host', { id: el.dataset.id });
+  if (act === 'hud-cc') {
+    localStorage.setItem(CINEMA_CC_KEY, captionsOn() ? '0' : '1');
+    applyCaptions();
+  }
   if (act === 'hud-toggle') toggleHud(el);
   if (act === 'hud-pause') hudTogglePause();
   if (act === 'hud-seek') hudSeek(Number(el.dataset.by) || 0);
@@ -949,18 +948,6 @@ document.addEventListener('click', (event) => {
   if (act === 'picker-tab') {
     pickerTab = el.dataset.tab === 'stickers' ? 'stickers' : 'emoji';
     emojiOpen = true;
-    paintPicker();
-  }
-  if (act === 'emoji-cat') {
-    const cats = el.closest('.emoji-cats');
-    if (cats?.dataset.skip) {
-      delete cats.dataset.skip;
-      return;
-    }
-    emojiCat = Number(el.dataset.cat) || 0;
-    emojiQuery = '';
-    const search = document.querySelector('.emoji-search');
-    if (search) search.value = '';
     paintPicker();
   }
   if (act === 'emoji-insert') insertEmoji(el.dataset.char || el.textContent || '');
@@ -1030,10 +1017,6 @@ document.addEventListener('input', (event) => {
     hudScrub = true;
     const label = document.querySelector('.hud-now');
     if (label) label.textContent = formatClock(Number(target.value) / 10);
-  }
-  if (target?.classList?.contains('emoji-search')) {
-    emojiQuery = target.value;
-    paintEmojiGrid();
   }
 });
 
@@ -1291,27 +1274,6 @@ document.addEventListener('pointercancel', () => {
   swipe = null;
 });
 
-function foldText(value) {
-  return String(value || '').toLowerCase().replace(/ё/g, 'е');
-}
-
-function ensureEmoji() {
-  if (emojiPack) return Promise.resolve(emojiPack);
-  if (!ensureEmoji.pending) {
-    ensureEmoji.pending = new Promise((resolve, reject) => {
-      const tag = document.createElement('script');
-      tag.src = '/emoji.js';
-      tag.onload = () => {
-        emojiPack = window.EMOJI_PACK || [];
-        resolve(emojiPack);
-      };
-      tag.onerror = () => reject(new Error('emoji'));
-      document.head.appendChild(tag);
-    });
-  }
-  return ensureEmoji.pending;
-}
-
 function sendChat(extra) {
   if (!state) return;
   socket.emit('chat', {
@@ -1388,6 +1350,8 @@ function refreshChatLog() {
   if (stick) log.scrollTop = log.scrollHeight;
 }
 
+const QUICK_EMOJI = ["😀","😃","😄","😁","😆","😅","😂","🤣","😊","😇","🙂","🙃","😉","😌","😍","🥰","😘","😗","😙","😚","😋","😛","😜","🤪","😝","🤑","🤗","🤭","🤫","🤔","🤐","🤨","😐","😑","😶","😏","😒","🙄","😬","😮‍💨","🤥","😔","😪","🤤","😴","😷","🤒","🤕","🤢","🤮","🤧","🥵","🥶","🥴","😵","🤯","🤠","🥳","😎","🤓","🧐","😕","😟","🙁","☹️","😮","😯","😲","😳","🥺","😦","😧","😨","😰","😥","😢","😭","😱","😖","😣","😞","😓","😩","😫","🥱","😤","😡","😠","🤬","😈","👿","💀","☠️","💩","🤡","👻","👽","🤖","❤️","🧡","💛","💚","💙","💜","🖤","🤍","🤎","💔","❤️‍🔥","💕","💞","💓","💗","💖","💘","💝","💯","💢","💥","💫","💦","💨","🕳️","💬","👍","👎","👌","✌️","🤞","🫰","🤟","🤘","🤙","👈","👉","👆","👇","☝️","✋","🤚","🖐️","🖖","👋","🤝","🙏","✍️","💪","🫶","👏","🙌","👐","🤲","🔥","✨","⭐","🌟","🎉","🎊","🎁","🏆","🥇","🎈","☀️","🌙","⚡","❄️","🌈","☁️","🌸","🌹","🍀","🐶","🐱","🐭","🐹","🐰","🦊","🐻","🐼","🐨","🐯","🦁","🐸","🐵","🍎","🍕","🍔","🍟","🍺","☕","🎂","⚽","🏀","🎵","🎶","📱","💻","📷","💡","💰","✅","❌","❗","❓","⚠️","🚀"];
+
 function paintPicker() {
   const pop = document.querySelector('.emoji-pop');
   if (!pop) return;
@@ -1404,80 +1368,13 @@ function paintPicker() {
       : '<p class="note">Стикеров пока нет. Добавь их в профиле.</p>';
     return;
   }
-  if (!body.querySelector('.emoji-search')) {
-    body.innerHTML = `
-      <input class="emoji-search" placeholder="Поиск" value="${escapeHtml(emojiQuery)}" autocomplete="off">
-      <div class="emoji-cats"></div>
-      <div class="emoji-grid"></div>`;
-    bindCatDrag(body.querySelector('.emoji-cats'));
-  }
-  if (!emojiPack) {
-    const grid = body.querySelector('.emoji-grid');
-    if (grid) grid.textContent = 'Загрузка…';
-    ensureEmoji().then(() => { if (emojiOpen && pickerTab === 'emoji') paintPicker(); }).catch(() => {
-      const failed = document.querySelector('.emoji-grid');
-      if (failed) failed.textContent = 'Не удалось загрузить эмодзи.';
-    });
-    return;
-  }
-  paintEmojiGrid();
-}
-
-function bindCatDrag(scroller) {
-  if (!scroller || scroller.dataset.drag) return;
-  scroller.dataset.drag = '1';
-  let drag = null;
-  scroller.addEventListener('pointerdown', (event) => {
-    if (event.pointerType !== 'mouse' || event.button !== 0) return;
-    drag = { x: event.clientX, left: scroller.scrollLeft, moved: false, id: event.pointerId };
-    scroller.setPointerCapture(event.pointerId);
-  });
-  scroller.addEventListener('pointermove', (event) => {
-    if (!drag || event.pointerId !== drag.id) return;
-    const dx = event.clientX - drag.x;
-    if (Math.abs(dx) > 6) drag.moved = true;
-    if (drag.moved) scroller.scrollLeft = drag.left - dx;
-  });
-  const end = (event) => {
-    if (!drag || event.pointerId !== drag.id) return;
-    if (drag.moved) {
-      scroller.dataset.skip = '1';
-      setTimeout(() => { delete scroller.dataset.skip; }, 0);
-    }
-    drag = null;
-  };
-  scroller.addEventListener('pointerup', end);
-  scroller.addEventListener('pointercancel', end);
-}
-
-function paintEmojiGrid() {
-  if (!emojiPack) return;
-  const cats = document.querySelector('.emoji-cats');
-  const grid = document.querySelector('.emoji-grid');
-  if (!cats || !grid) return;
-  const query = foldText(emojiQuery.trim());
-  cats.innerHTML = emojiPack.map((group, index) => `<button type="button" class="${!query && index === emojiCat ? 'on' : ''}" data-act="emoji-cat" data-cat="${index}">${escapeHtml(group.title)}</button>`).join('');
-  const items = [];
-  if (query) {
-    for (const group of emojiPack) {
-      for (const item of group.items) {
-        if (foldText(item[1]).includes(query) || item[0] === emojiQuery.trim()) items.push(item[0]);
-        if (items.length >= 280) break;
-      }
-      if (items.length >= 280) break;
-    }
-  } else {
-    items.push(...(emojiPack[emojiCat] || emojiPack[0]).items.map((item) => item[0]));
-  }
-  grid.innerHTML = items.length
-    ? items.map((char) => `<button type="button" data-act="emoji-insert">${char}</button>`).join('')
-    : '<p class="note">Ничего не нашлось</p>';
+  body.innerHTML = `<div class="emoji-grid">${QUICK_EMOJI.map((char) => `<button type="button" data-act="emoji-insert">${char}</button>`).join('')}</div>`;
 }
 
 const CINEMA_VOL_KEY = 'leisure-cinema-volume';
 const CINEMA_MUTE_KEY = 'leisure-cinema-muted';
 const CINEMA_QUAL_KEY = 'leisure-cinema-quality';
-const ICE = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+const CINEMA_CC_KEY = 'leisure-cinema-cc';
 
 let cinemaTab = 'chat';
 let cinemaUnread = 0;
@@ -1501,9 +1398,6 @@ let ytCatching = false;
 let ytSawPlayback = false;
 let remoteAction = 0;
 let lastSample = 0;
-let screenStream = null;
-let watchPc = null;
-const hostPeers = new Map();
 
 function cinemaStructure(snapshot) {
   return JSON.stringify({
@@ -1566,14 +1460,47 @@ function hostRoomCard() {
         <strong>${escapeHtml(state.code)}</strong>
       </div>
       <button class="btn" type="button" data-act="copy-link">Скопировать ссылку</button>
-      ${state.video?.id && !state.screen ? `<form data-act="cinema-url">
+      ${state.video?.id ? `<form data-act="cinema-url">
         <input class="cinema-url" value="${escapeHtml(cinemaUrlDraft)}" placeholder="Другая ссылка" autocomplete="off">
         <button class="btn" type="submit">Сменить</button>
       </form>` : ''}
-      ${state.screen
-        ? '<button class="btn ghost wide" type="button" data-act="screen-stop">Остановить демонстрацию</button>'
-        : '<button class="btn ghost wide" type="button" data-act="screen-start">Демонстрация экрана</button>'}
     </div>`;
+}
+
+function captionsOn() {
+  return localStorage.getItem(CINEMA_CC_KEY) === '1';
+}
+
+let captionTimer = 0;
+
+function applyCaptions(attempt = 0) {
+  const on = captionsOn();
+  document.querySelectorAll('.hud-cc').forEach((button) => {
+    button.classList.toggle('on', on);
+    button.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+  clearTimeout(captionTimer);
+  let waiting = false;
+  if (ytPlayer?.loadModule) {
+    try {
+      if (!on) {
+        ytPlayer.unloadModule?.('captions');
+      } else {
+        ytPlayer.loadModule('captions');
+        const tracks = ytPlayer.getOption?.('captions', 'tracklist') || [];
+        const track = tracks.find((item) => item.languageCode === 'ru')
+          || tracks.find((item) => String(item.languageCode || '').startsWith('en'))
+          || tracks[0];
+        if (track) ytPlayer.setOption('captions', 'track', track);
+        else waiting = true;
+      }
+    } catch { waiting = on; }
+  }
+  if (waiting && attempt < 5) captionTimer = setTimeout(() => applyCaptions(attempt + 1), 800);
+  document.querySelectorAll('.cloud-video').forEach((node) => {
+    if (!node.textTracks) return;
+    for (const track of node.textTracks) track.mode = on ? 'showing' : 'disabled';
+  });
 }
 
 function formatClock(seconds) {
@@ -1631,6 +1558,7 @@ function paintSoftKeys() {
       <button type="button" data-act="soft-key" data-key="lang">${softLayout === 'ru' ? 'RU' : 'EN'}</button>
       <button type="button" class="soft-space" data-act="soft-key" data-key="space">Пробел</button>
       <button type="button" data-act="soft-key" data-key="back">⌫</button>
+      <button type="button" class="soft-close" data-act="soft-key" data-key="close">Закрыть</button>
     </div>`;
 }
 
@@ -1650,6 +1578,10 @@ function pressSoftKey(key) {
   }
   if (key === 'back') {
     input.value = Array.from(input.value).slice(0, -1).join('');
+    return;
+  }
+  if (key === 'close') {
+    document.querySelector('.cinema')?.classList.remove('keys-open');
     return;
   }
   if (key === 'space') key = ' ';
@@ -1764,12 +1696,11 @@ function cinemaHtml() {
   const badge = cinemaUnread && cinemaTab !== 'chat' ? `<i class="badge">${cinemaUnread}</i>` : '';
   const hasMedia = Boolean(state.screen || state.video?.id);
   const timeline = Boolean(state.video?.id && !state.video.live && !state.video.clip && !state.screen);
-  const showQuality = state.video?.id && !state.screen && !state.video.clip && (state.video.kind === 'youtube' || state.video.kind === 'twitch' || !state.video.kind);
-  const showVolume = state.screen || (state.video?.id && !state.video.clip);
+  const showQuality = state.video?.id && !state.video.clip && (state.video.kind === 'youtube' || state.video.kind === 'twitch' || !state.video.kind);
+  const showVolume = Boolean(state.video?.id && !state.video.clip);
+  const showCaptions = Boolean(state.video?.id && !state.video.clip && state.video.kind !== 'twitch');
   let stage = '';
-  if (state.screen) {
-    stage = '<video class="screen-video" autoplay playsinline></video>';
-  } else if (state.video?.kind === 'twitch' && state.video.clip) {
+  if (state.video?.kind === 'twitch' && state.video.clip) {
     const parent = encodeURIComponent(location.hostname);
     stage = `<iframe class="twitch-clip" src="https://clips.twitch.tv/embed?clip=${encodeURIComponent(state.video.id)}&parent=${parent}&autoplay=false"></iframe>`;
   } else if (state.video?.kind === 'twitch' && state.video.id) {
@@ -1781,12 +1712,11 @@ function cinemaHtml() {
   } else {
     stage = `
       <div class="source-box">
-        <p>${host ? 'Вставь ссылку на YouTube, Twitch, Google Drive или Dropbox. Или начни демонстрацию экрана.' : 'Хост ещё не выбрал, что смотреть.'}</p>
+        <p>${host ? 'Вставь ссылку на YouTube, Twitch, Google Drive или Dropbox.' : 'Хост ещё не выбрал, что смотреть.'}</p>
         ${host ? `<form data-act="cinema-url">
           <input class="cinema-url" value="${escapeHtml(cinemaUrlDraft)}" placeholder="YouTube, Twitch, Drive или Dropbox" autocomplete="off">
           <button class="btn" type="submit">Смотреть вместе</button>
-        </form>
-        <button class="btn ghost" type="button" data-act="screen-start">Демонстрация экрана</button>` : ''}
+        </form>` : ''}
       </div>`;
   }
   const hud = hasMedia ? `
@@ -1797,6 +1727,7 @@ function cinemaHtml() {
           ${showQuality ? `<select class="cinema-quality" aria-label="Качество">
             ${[['auto', 'Авто'], ['small', '240p'], ['medium', '360p'], ['large', '480p'], ['hd720', '720p'], ['hd1080', '1080p']].map(([item, label]) => `<option value="${item}" ${item === quality ? 'selected' : ''}>${label}</option>`).join('')}
           </select>` : ''}
+          ${showCaptions ? `<button class="hud-btn hud-cc${captionsOn() ? ' on' : ''}" type="button" data-act="hud-cc" aria-pressed="${captionsOn() ? 'true' : 'false'}" aria-label="Субтитры">CC</button>` : ''}
           ${showVolume ? `<label class="hud-volume"><span>Громкость</span><input class="cinema-volume" type="range" min="0" max="100" value="${volume}"></label>` : ''}
         </div>
       </div>
@@ -1919,8 +1850,7 @@ function handleCinemaState(next) {
   renderCinema();
   noteFloaters(prev, next);
   syncYouTube();
-  if (next.screen && !next.youHost) ensureWatching();
-  if (!next.screen) closeWatch();
+  applyCaptions();
 }
 
 function loadYouTube() {
@@ -1946,12 +1876,6 @@ function mountCinemaStage() {
   lastSample = 0;
   destroyYouTube();
   destroyTwitch();
-  if (state.screen) {
-    applyCinemaVolume();
-    if (state.youHost && screenStream) attachLocalPreview();
-    return;
-  }
-  closeWatch();
   const video = state.video;
   if (!video?.id) return;
   if (video.kind === 'twitch') {
@@ -1979,7 +1903,7 @@ function mountCinemaStage() {
         rel: 0,
         modestbranding: 1,
         iv_load_policy: 3,
-        cc_load_policy: 0,
+        cc_load_policy: captionsOn() ? 1 : 0,
         playsinline: 1,
         autohide: 1,
         showinfo: 0,
@@ -1996,6 +1920,7 @@ function mountCinemaStage() {
           }
           applyCinemaVolume();
           applyCinemaQuality();
+          applyCaptions();
           syncYouTube(true);
         },
         onStateChange: onYouTubeState,
@@ -2085,7 +2010,10 @@ function mountCloud() {
     if (node.seeking) return;
     noteMediaPause(node.currentTime || 0);
   });
-  node.addEventListener('loadeddata', () => syncYouTube(true));
+  node.addEventListener('loadeddata', () => {
+    syncYouTube(true);
+    applyCaptions();
+  });
 }
 
 function noteMediaPlay() {
@@ -2145,11 +2073,6 @@ function applyCinemaVolume() {
     node.volume = volume / 100;
     node.muted = muted;
   });
-  const screen = document.querySelector('.screen-video');
-  if (screen && !state?.youHost) {
-    screen.volume = volume / 100;
-    screen.muted = muted;
-  }
 }
 
 function applyCinemaQuality() {
@@ -2166,7 +2089,10 @@ function applyCinemaQuality() {
 
 function onYouTubeState(event) {
   if (!state?.video?.id || state.screen || state.video.live) return;
-  if (event.data === YT.PlayerState.PLAYING) noteMediaPlay(ytPlayer?.getCurrentTime?.() || 0);
+  if (event.data === YT.PlayerState.PLAYING) {
+    noteMediaPlay(ytPlayer?.getCurrentTime?.() || 0);
+    applyCaptions();
+  }
   else if (event.data === YT.PlayerState.PAUSED) noteMediaPause(ytPlayer?.getCurrentTime?.() || 0);
 }
 
@@ -2281,129 +2207,7 @@ function syncYouTube(force) {
 function stopCinemaMedia() {
   destroyYouTube();
   destroyTwitch();
-  closeHostPeers();
-  closeWatch();
-  if (screenStream) {
-    screenStream.getTracks().forEach((track) => track.stop());
-    screenStream = null;
-  }
 }
-
-async function startScreenShare() {
-  if (!state?.youHost) return;
-  if (!navigator.mediaDevices?.getDisplayMedia) {
-    toast('Этот браузер не умеет показывать экран');
-    return;
-  }
-  try {
-    screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
-  } catch {
-    try {
-      screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-      toast('Браузер не передал звук. Зрители увидят картинку без звука.');
-    } catch {
-      toast('Демонстрация отменена');
-      return;
-    }
-  }
-  const track = screenStream.getVideoTracks()[0];
-  if (track) track.addEventListener('ended', () => stopScreenShare());
-  socket.emit('cinema:screen', { start: true });
-}
-
-function stopScreenShare() {
-  if (screenStream) {
-    screenStream.getTracks().forEach((track) => track.stop());
-    screenStream = null;
-  }
-  closeHostPeers();
-  if (state?.screen) socket.emit('cinema:screen', { start: false });
-}
-
-function attachLocalPreview() {
-  const video = document.querySelector('.screen-video');
-  if (!video || !screenStream) return;
-  video.srcObject = screenStream;
-  video.muted = true;
-  video.play().catch(() => {});
-}
-
-function closeHostPeers() {
-  hostPeers.forEach((pc) => pc.close());
-  hostPeers.clear();
-}
-
-function closeWatch() {
-  if (watchPc) {
-    watchPc.close();
-    watchPc = null;
-  }
-  const video = document.querySelector('.screen-video');
-  if (video && !state?.youHost) video.srcObject = null;
-}
-
-function ensureWatching() {
-  if (watchPc || !state?.screen || state.youHost) return;
-  const video = document.querySelector('.screen-video');
-  if (!video) return;
-  watchPc = new RTCPeerConnection(ICE);
-  watchPc.ontrack = (event) => {
-    video.srcObject = event.streams[0];
-    applyCinemaVolume();
-    video.play().catch(() => toast('Нажми на экран, чтобы включить звук демонстрации'));
-  };
-  watchPc.onicecandidate = (event) => {
-    if (event.candidate) socket.emit('cinema:signal', { candidate: event.candidate });
-  };
-  socket.emit('cinema:watch');
-}
-
-async function hostOffer(viewerId) {
-  if (!screenStream || hostPeers.has(viewerId)) return;
-  const pc = new RTCPeerConnection(ICE);
-  hostPeers.set(viewerId, pc);
-  screenStream.getTracks().forEach((track) => pc.addTrack(track, screenStream));
-  pc.onicecandidate = (event) => {
-    if (event.candidate) socket.emit('cinema:signal', { to: viewerId, candidate: event.candidate });
-  };
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  socket.emit('cinema:signal', { to: viewerId, description: pc.localDescription });
-}
-
-socket.on('cinema:viewer', ({ id } = {}) => {
-  if (id) hostOffer(id).catch(() => toast('Не удалось подключить зрителя к демонстрации'));
-});
-
-socket.on('cinema:signal', async ({ from, description, candidate } = {}) => {
-  try {
-    if (state?.youHost) {
-      const pc = hostPeers.get(from);
-      if (!pc) return;
-      if (description) await pc.setRemoteDescription(description);
-      if (candidate) await pc.addIceCandidate(candidate);
-      return;
-    }
-    if (!watchPc) ensureWatching();
-    if (!watchPc) return;
-    if (description?.type === 'offer') {
-      await watchPc.setRemoteDescription(description);
-      const answer = await watchPc.createAnswer();
-      await watchPc.setLocalDescription(answer);
-      socket.emit('cinema:signal', { to: from, description: watchPc.localDescription });
-    }
-    if (candidate) await watchPc.addIceCandidate(candidate);
-  } catch { /* ignore late signaling */ }
-});
-
-socket.on('cinema:screen-off', () => {
-  closeHostPeers();
-  closeWatch();
-  if (screenStream) {
-    screenStream.getTracks().forEach((track) => track.stop());
-    screenStream = null;
-  }
-});
 
 setInterval(() => {
   if (state?.game === 'cinema' && !state.screen) syncYouTube(false);
