@@ -68,6 +68,7 @@ let lobbyUnread = 0;
 let fleetDraft = null;
 let fleetSelect = 0;
 let fleetHover = null;
+let shipDrag = null;
 let pendingPane = null;
 let chatUnread = 0;
 let chatNotice = '';
@@ -216,6 +217,22 @@ function avatarHtml(person, fallback) {
   return `<span class="avatar letter">${escapeHtml(letter)}</span>`;
 }
 
+function userCode(value) {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const source = String(value || '');
+  let hash = 2166136261;
+  for (let i = 0; i < source.length; i += 1) {
+    hash ^= source.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  let id = '';
+  for (let i = 0; i < 8; i += 1) {
+    hash = Math.imul(hash ^ (hash >>> 16), 2246822519);
+    id += alphabet[(hash >>> 0) % alphabet.length];
+  }
+  return `${id.slice(0, 4)}-${id.slice(4)}`;
+}
+
 function renderHeader() {
   headerSlot.innerHTML = `
     <button type="button" class="profile-chip" data-act="profile">
@@ -238,7 +255,8 @@ function renderModal() {
   modal.innerHTML = `
     <div class="modal-card">
       <h2>Профиль</h2>
-      <p class="note">Это имя и аватарка видны другу в комнате.</p>
+      <p class="profile-id"><span>ID</span> <strong>${userCode(token)}</strong></p>
+      <p class="note">Это имя и аватарка видны другу в комнате. ID остаётся за тобой в этом браузере.</p>
       <label class="avatar-pick">
         ${preview}
         <span>Выбрать аватарку</span>
@@ -752,13 +770,6 @@ function gameHtml() {
     turnClass = ' you';
   }
 
-  const again = state.phase === 'done' && state.you === 'host'
-    ? '<button class="btn" type="button" data-act="again">Сыграть ещё</button>'
-    : '';
-  const wait = state.phase === 'done' && state.you !== 'host'
-    ? '<p class="note">Ждём, пока хост откроет лобби</p>'
-    : '';
-
   const chatLabel = chatUnread ? `Чат <i class="badge">${chatUnread}</i>` : 'Чат';
   const chatNote = chatUnread && mobilePane !== 'chat'
     ? `<button type="button" class="chat-note" data-act="pane" data-pane="chat">${escapeHtml(chatNotice || 'Новое сообщение в чате')}</button>`
@@ -783,17 +794,12 @@ function gameHtml() {
       ${chatNote}
       ${given}
       <div class="game-top">
-        <div class="pill">
-          <span>Код</span>
-          <strong>${escapeHtml(state.code)}</strong>
-          <button class="btn" type="button" data-act="copy">Скопировать</button>
-        </div>
+        <div></div>
         <div class="turn-wrap">
           <div class="turn${turnClass}">${turnText}</div>
           ${clock}
-          ${wait}
         </div>
-        <div class="top-actions">${again}<button class="btn ghost" type="button" data-act="leave">Выйти</button></div>
+        <div class="top-actions"><button class="btn ghost" type="button" data-act="leave">Выйти</button></div>
       </div>
       <div class="game-grid" data-pane="${mobilePane}">
         ${columnHtml('host')}
@@ -842,6 +848,8 @@ function fleetGeometryOk(ships) {
 function syncFleetDraft(prev, next) {
   if (next.game !== 'battle' || next.phase !== 'place') {
     fleetHover = null;
+    shipDrag = null;
+    document.querySelector('.drag-ghost')?.remove();
     return;
   }
   const entered = !prev || prev.game !== 'battle' || prev.phase !== 'place' || prev.code !== next.code;
@@ -861,42 +869,38 @@ function rotatePlacement() {
   const ship = fleetDraft?.[fleetSelect];
   if (!ship) return;
   const next = { ...ship, dir: ship.dir === 'h' ? 'v' : 'h' };
-  if (ship.r != null) {
+  if (ship.r != null && !shipDrag) {
     const trial = fleetDraft.map((item, i) => (i === fleetSelect ? next : item)).filter((item) => item.r != null);
     if (!fleetGeometryOk(trial)) return;
-  }
-  fleetDraft[fleetSelect] = next;
-  sendLayout();
-  render();
-}
-
-function placeAt(r, c) {
-  if (state?.game !== 'battle' || state.phase !== 'place' || state.youReady || !fleetDraft) return;
-  const hit = fleetDraft.findIndex((ship) => shipCellsOf(ship).some(([rr, cc]) => rr === r && cc === c));
-  if (hit >= 0) {
-    fleetSelect = hit;
-    fleetDraft[hit] = { ...fleetDraft[hit], r: null, c: null };
+    fleetDraft[fleetSelect] = next;
     sendLayout();
     render();
     return;
   }
-  const ship = fleetDraft[fleetSelect];
-  if (!ship) return;
-  const next = { ...ship, r, c };
-  const trial = fleetDraft.map((item, i) => (i === fleetSelect ? next : item)).filter((item) => item.r != null);
-  if (!fleetGeometryOk(trial)) return;
   fleetDraft[fleetSelect] = next;
-  const nxt = fleetDraft.findIndex((item) => item.r == null);
-  if (nxt >= 0) fleetSelect = nxt;
-  sendLayout();
+  if (shipDrag) {
+    shipDrag.offsetR = 0;
+    shipDrag.offsetC = 0;
+    paintFleetPreview();
+    paintDragGhost(shipDrag.x, shipDrag.y);
+    return;
+  }
   render();
 }
 
-function shipTitle(ship, index) {
-  const names = { 4: 'Линкор', 3: 'Крейсер', 2: 'Эсминец', 1: 'Катер' };
-  const same = fleetDraft.filter((item) => item.len === ship.len);
-  const n = fleetDraft.slice(0, index + 1).filter((item) => item.len === ship.len).length;
-  return same.length > 1 ? `${names[ship.len]} ${n}` : names[ship.len];
+function dropShip(index, r, c) {
+  const ship = fleetDraft[index];
+  if (!ship) return false;
+  const next = { ...ship, r, c };
+  const trial = fleetDraft.map((item, i) => (i === index ? next : item)).filter((item) => item.r != null);
+  if (!fleetGeometryOk(trial)) return false;
+  fleetDraft[index] = next;
+  sendLayout();
+  return true;
+}
+
+function shipBlocks(len) {
+  return Array.from({ length: len }, () => '<i></i>').join('');
 }
 
 function ghostMark(r, c) {
@@ -913,16 +917,17 @@ function ghostMark(r, c) {
 function seaCell(kind, r, c) {
   const placing = state.phase === 'place' && kind === 'mine';
   const own = placing ? fleetDraft : (state.yourFleet || []);
-  const shipHere = (own || []).some((ship) => shipCellsOf(ship).some(([rr, cc]) => rr === r && cc === c));
+  const shipIndex = (own || []).findIndex((ship) => shipCellsOf(ship).some(([rr, cc]) => rr === r && cc === c));
   const shots = kind === 'mine' ? state.incoming : state.yourShots;
   const shot = (shots || []).find((item) => item.r === r && item.c === c);
+  const lifted = shipDrag?.moved && shipDrag.index === shipIndex;
   let cls = 'sea-cell';
-  if (kind === 'mine' && shipHere) cls += ' ship';
+  if (kind === 'mine' && shipIndex >= 0 && !lifted) cls += ' ship';
   if (shot) cls += ` ${shot.mark}`;
   if (placing) cls += ghostMark(r, c);
   const canPlace = placing && !state.youReady;
   const canShoot = kind === 'foe' && state.phase === 'play' && state.turn === state.you && !shot;
-  if (canPlace) return `<button type="button" class="${cls}" data-act="place" data-r="${r}" data-c="${c}"></button>`;
+  if (canPlace) return `<button type="button" class="${cls}" data-r="${r}" data-c="${c}"></button>`;
   if (canShoot) return `<button type="button" class="${cls} aim" data-act="shot" data-r="${r}" data-c="${c}"></button>`;
   return `<button type="button" class="${cls} locked" tabindex="-1" disabled></button>`;
 }
@@ -941,20 +946,21 @@ function seaGrid(kind) {
 
 function fleetDock() {
   if (state.phase !== 'place') return '';
-  const buttons = (fleetDraft || []).map((ship, index) => {
-    const placed = ship.r != null;
-    return `<button type="button" class="${index === fleetSelect ? 'on' : ''}${placed ? ' placed' : ''}" data-act="pick" data-i="${index}">${shipTitle(ship, index)}</button>`;
+  const pieces = (fleetDraft || []).map((ship, index) => {
+    if (ship.r != null) return '';
+    return `<div class="ship-piece${ship.dir === 'v' ? ' v' : ''}${index === fleetSelect ? ' on' : ''}" data-ship="${index}">${shipBlocks(ship.len)}</div>`;
   }).join('');
   const ready = state.youReady
     ? '<button class="btn ghost" type="button" data-act="ready" data-on="0">Отменить готовность</button>'
     : '<button class="btn" type="button" data-act="ready" data-on="1">Готово</button>';
   return `
-    <div class="fleet-dock">${buttons}</div>
-    <div class="place-tools">
-      <button class="btn ghost" type="button" data-act="rotate">Повернуть</button>
-      ${ready}
-    </div>
-    <p class="note">На телефоне поверни кнопкой. На компьютере ещё и клавишей R.</p>`;
+    <div class="place-bar">
+      <div class="fleet-dock">${pieces}</div>
+      <div class="place-tools">
+        <button class="btn ghost" type="button" data-act="rotate">Повернуть</button>
+        ${ready}
+      </div>
+    </div>`;
 }
 
 function battleSide(kind) {
@@ -968,9 +974,9 @@ function battleSide(kind) {
     <section class="side${mine ? ' is-mine' : ' is-theirs'}${active ? ' is-turn' : ''}">
       <div class="side-head"><h2>${title}</h2></div>
       <div class="side-body">
+        ${mine ? fleetDock() : ''}
         ${foeNote}
         ${seaGrid(kind)}
-        ${mine ? fleetDock() : ''}
       </div>
     </section>`;
 }
@@ -1001,12 +1007,6 @@ function battleGameHtml() {
     turnText = state.winner === state.you ? 'Ты победил' : `Победил ${displayName(state.winner)}`;
     turnClass = ' you';
   }
-  const again = state.phase === 'done' && state.you === 'host'
-    ? '<button class="btn" type="button" data-act="again">Сыграть ещё</button>'
-    : '';
-  const wait = state.phase === 'done' && state.you !== 'host'
-    ? '<p class="note">Ждём, пока хост откроет лобби</p>'
-    : '';
   const chatLabel = chatUnread ? `Чат <i class="badge">${chatUnread}</i>` : 'Чат';
   const chatNote = chatUnread && mobilePane !== 'chat'
     ? `<button type="button" class="chat-note" data-act="pane" data-pane="chat">${escapeHtml(chatNotice || 'Новое сообщение в чате')}</button>`
@@ -1023,17 +1023,12 @@ function battleGameHtml() {
       </div>
       ${chatNote}
       <div class="game-top">
-        <div class="pill">
-          <span>Код</span>
-          <strong>${escapeHtml(state.code)}</strong>
-          <button class="btn" type="button" data-act="copy">Скопировать</button>
-        </div>
+        <div></div>
         <div class="turn-wrap">
           <div class="turn${turnClass}">${turnText}</div>
           ${clock}
-          ${wait}
         </div>
-        <div class="top-actions">${again}<button class="btn ghost" type="button" data-act="leave">Выйти</button></div>
+        <div class="top-actions"><button class="btn ghost" type="button" data-act="leave">Выйти</button></div>
       </div>
       <div class="game-grid" data-pane="${mobilePane}">
         ${battleSide('mine')}
@@ -1041,6 +1036,24 @@ function battleGameHtml() {
         ${battleSide('foe')}
       </div>
       ${confirm}
+    </section>`;
+}
+
+function resultHtml() {
+  const title = state.winner === state.you ? 'Ты победил' : `Победил ${displayName(state.winner)}`;
+  const words = state.game === 'battle' || !state.answers ? '' : `
+    <div class="result-words">
+      <p>${escapeHtml(displayName('host'))} загадал <strong>${escapeHtml(String(state.answers.guest || '').toUpperCase())}</strong></p>
+      <p>${escapeHtml(displayName('guest'))} загадал <strong>${escapeHtml(String(state.answers.host || '').toUpperCase())}</strong></p>
+    </div>`;
+  return `
+    <section class="result-screen">
+      <h2>${escapeHtml(title)}</h2>
+      ${words}
+      <div class="lobby-actions">
+        <button class="btn" type="button" data-act="again">Лобби</button>
+        <button class="btn ghost" type="button" data-act="leave">Выйти</button>
+      </div>
     </section>`;
 }
 
@@ -1058,9 +1071,11 @@ function render() {
     ? homeHtml()
     : state.phase === 'lobby'
       ? lobbyHtml()
-      : state.game === 'battle'
-        ? battleGameHtml()
-        : gameHtml();
+      : state.phase === 'done'
+        ? resultHtml()
+        : state.game === 'battle'
+          ? battleGameHtml()
+          : gameHtml();
   view.innerHTML = page;
   restoreForm();
   paintPicker();
@@ -1184,15 +1199,6 @@ document.addEventListener('click', (event) => {
   }
   if (act === 'ready') {
     socket.emit('battle:ready', { on: el.dataset.on === '1' });
-    return;
-  }
-  if (act === 'pick') {
-    fleetSelect = Number(el.dataset.i) || 0;
-    render();
-    return;
-  }
-  if (act === 'place') {
-    placeAt(Number(el.dataset.r), Number(el.dataset.c));
     return;
   }
   if (act === 'shot') {
@@ -1534,12 +1540,53 @@ function handleBattleState(next) {
 }
 
 function paintFleetPreview() {
+  const lifted = shipDrag?.moved ? shipDrag.index : -1;
   document.querySelectorAll('.sea.mine [data-r]').forEach((button) => {
-    button.classList.remove('preview-ok', 'preview-bad');
-    const mark = ghostMark(Number(button.dataset.r), Number(button.dataset.c));
+    button.classList.remove('preview-ok', 'preview-bad', 'ship');
+    const r = Number(button.dataset.r);
+    const c = Number(button.dataset.c);
+    const index = (fleetDraft || []).findIndex((ship) => shipCellsOf(ship).some(([rr, cc]) => rr === r && cc === c));
+    if (index >= 0 && index !== lifted) button.classList.add('ship');
+    const mark = ghostMark(r, c);
     if (mark.includes('preview-ok')) button.classList.add('preview-ok');
     if (mark.includes('preview-bad')) button.classList.add('preview-bad');
   });
+}
+
+function paintDragGhost(x, y) {
+  let ghost = document.querySelector('.drag-ghost');
+  if (!shipDrag?.moved) {
+    ghost?.remove();
+    return;
+  }
+  const ship = fleetDraft?.[shipDrag.index];
+  if (!ship) return;
+  if (!ghost) {
+    ghost = document.createElement('div');
+    ghost.className = 'drag-ghost';
+    document.body.appendChild(ghost);
+  }
+  ghost.classList.toggle('v', ship.dir === 'v');
+  ghost.innerHTML = shipBlocks(ship.len);
+  ghost.style.left = `${x + 12}px`;
+  ghost.style.top = `${y + 12}px`;
+}
+
+function cellUnderPointer(x, y) {
+  const cell = document.elementFromPoint(x, y)?.closest?.('.sea.mine [data-r]');
+  if (!cell) return null;
+  return { r: Number(cell.dataset.r), c: Number(cell.dataset.c) };
+}
+
+function endShipDrag(event) {
+  if (!shipDrag || (event && event.pointerId !== shipDrag.pointer)) return;
+  const drag = shipDrag;
+  const hover = fleetHover;
+  shipDrag = null;
+  fleetHover = null;
+  document.querySelector('.drag-ghost')?.remove();
+  if (drag.moved && hover) dropShip(drag.index, hover.r, hover.c);
+  render();
 }
 
 socket.on('state', (next) => {
@@ -1613,22 +1660,55 @@ socket.on('errorMsg', (payload) => {
 
 render();
 
-view.addEventListener('mouseover', (event) => {
-  const cell = event.target.closest?.('[data-act="place"]');
-  if (!cell || state?.game !== 'battle' || state.phase !== 'place' || state.youReady) return;
-  const r = Number(cell.dataset.r);
-  const c = Number(cell.dataset.c);
-  if (fleetHover && fleetHover.r === r && fleetHover.c === c) return;
-  fleetHover = { r, c };
-  paintFleetPreview();
+document.addEventListener('pointerdown', (event) => {
+  if (state?.game !== 'battle' || state.phase !== 'place' || state.youReady || event.button) return;
+  if (event.target.closest?.('[data-act="rotate"], [data-act="ready"]')) return;
+  const piece = event.target.closest?.('[data-ship]');
+  const cell = event.target.closest?.('.sea.mine [data-r]');
+  if (!piece && !cell) return;
+  let index = -1;
+  let offsetR = 0;
+  let offsetC = 0;
+  if (piece) {
+    index = Number(piece.dataset.ship);
+    if (!fleetDraft?.[index] || fleetDraft[index].r != null) return;
+  } else {
+    const r = Number(cell.dataset.r);
+    const c = Number(cell.dataset.c);
+    index = fleetDraft.findIndex((ship) => shipCellsOf(ship).some(([rr, cc]) => rr === r && cc === c));
+    if (index < 0) return;
+    offsetR = r - fleetDraft[index].r;
+    offsetC = c - fleetDraft[index].c;
+  }
+  shipDrag = {
+    index,
+    offsetR,
+    offsetC,
+    pointer: event.pointerId,
+    moved: false,
+    startX: event.clientX,
+    startY: event.clientY,
+    x: event.clientX,
+    y: event.clientY,
+  };
+  fleetSelect = index;
+  event.preventDefault();
 });
 
-view.addEventListener('mouseout', (event) => {
-  if (!fleetHover || !event.target.closest?.('[data-act="place"]')) return;
-  if (event.relatedTarget?.closest?.('[data-act="place"]')) return;
-  fleetHover = null;
+document.addEventListener('pointermove', (event) => {
+  if (!shipDrag || event.pointerId !== shipDrag.pointer) return;
+  shipDrag.x = event.clientX;
+  shipDrag.y = event.clientY;
+  if (!shipDrag.moved && Math.hypot(event.clientX - shipDrag.startX, event.clientY - shipDrag.startY) < 4) return;
+  shipDrag.moved = true;
+  const cell = cellUnderPointer(event.clientX, event.clientY);
+  fleetHover = cell ? { r: cell.r - shipDrag.offsetR, c: cell.c - shipDrag.offsetC } : null;
   paintFleetPreview();
+  paintDragGhost(event.clientX, event.clientY);
 });
+
+document.addEventListener('pointerup', endShipDrag);
+document.addEventListener('pointercancel', endShipDrag);
 
 setInterval(() => {
   document.querySelectorAll('.clock').forEach((el) => {

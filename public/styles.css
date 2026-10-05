@@ -640,19 +640,19 @@ button {
 }
 
 .game-screen {
-  height: calc(100vh - 92px);
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  min-height: 560px;
 }
 
 .game-top {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
   gap: 12px;
-  margin-bottom: 14px;
-  flex-wrap: wrap;
+  margin-bottom: 10px;
+  flex-shrink: 0;
 }
 
 .pill {
@@ -672,8 +672,62 @@ button {
 
 .turn-wrap { text-align: center; }
 .turn-wrap .note { margin: 4px 0 0; font-size: 13px; }
-.top-actions { display: flex; gap: 8px; align-items: center; }
+.top-actions { display: flex; gap: 8px; align-items: center; justify-self: end; }
 
+html:has(body.in-game) {
+  height: 100dvh;
+  overflow: hidden;
+}
+
+body.in-game {
+  height: 100dvh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+body.in-game #view {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+  margin-bottom: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.result-screen {
+  margin: auto;
+  width: min(460px, 100%);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  padding: 32px 24px;
+  text-align: center;
+  box-shadow: var(--shadow);
+}
+
+.result-screen h2 {
+  margin: 0 0 16px;
+  font-family: Unbounded, Manrope, sans-serif;
+  font-size: 28px;
+}
+
+.result-words p { margin: 8px 0; font-size: 18px; }
+.result-words strong { letter-spacing: 0.08em; }
+.result-screen .lobby-actions { margin-top: 22px; }
+
+.profile-id {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.profile-id strong {
+  color: var(--cream);
+  letter-spacing: 0.12em;
+  font-family: Unbounded, Manrope, sans-serif;
+}
 .turn { font-weight: 800; }
 .turn.you { color: #ffb199; }
 
@@ -708,17 +762,21 @@ button {
 
 .sea-wrap {
   flex: 1;
+  min-width: 0;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
+  container-type: size;
+  display: grid;
+  place-items: center;
 }
 
 .sea {
   display: grid;
   grid-template-columns: 16px repeat(10, minmax(0, 1fr));
   grid-template-rows: 16px repeat(10, minmax(0, 1fr));
-  width: min(100%, 440px);
-  aspect-ratio: 1;
-  margin: 0 auto;
+  width: min(100cqw, 100cqh);
+  height: min(100cqw, 100cqh);
+  touch-action: none;
 }
 
 .sea i {
@@ -758,32 +816,60 @@ button {
 .sea button.locked { cursor: default; }
 .sea button.aim:hover { outline: 1px solid var(--coral); outline-offset: -2px; }
 
+.place-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  margin-bottom: 8px;
+}
+
 .fleet-dock {
   display: flex;
+  flex: 1;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 10px;
-  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+  min-height: 22px;
+  min-width: 0;
 }
 
-.fleet-dock button {
-  border: 1px solid var(--line);
-  background: #1a1511;
-  color: var(--cream);
-  border-radius: 10px;
-  padding: 6px 8px;
-  font-size: 12px;
-  font-weight: 700;
+.ship-piece,
+.drag-ghost {
+  display: grid;
+  grid-auto-flow: column;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  touch-action: none;
+  cursor: grab;
 }
 
-.fleet-dock button.on { border-color: var(--coral); }
-.fleet-dock button.placed { opacity: 0.55; }
+.ship-piece.v,
+.drag-ghost.v { grid-auto-flow: row; }
+.ship-piece.on { border-color: var(--coral); }
+
+.ship-piece i,
+.drag-ghost i {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  background: #2c6484;
+  display: block;
+}
+
+.drag-ghost {
+  position: fixed;
+  z-index: 20;
+  pointer-events: none;
+  background: rgba(20, 17, 14, 0.2);
+}
 
 .place-tools {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 10px;
   flex-shrink: 0;
 }
 
@@ -1173,12 +1259,8 @@ button {
   }
 
   body.in-game { overflow: hidden; height: 100dvh; }
-  body.in-game #view {
-    height: calc(100dvh - 68px);
-    margin-bottom: 0;
-  }
 
-  .game-screen { height: 100%; min-height: 0; }
+  .game-screen { height: auto; min-height: 0; }
   .game-grid { display: block; flex: 1; min-height: 0; }
   .game-grid .side,
   .game-grid .chat-panel { display: none; height: 100%; min-height: 0; }

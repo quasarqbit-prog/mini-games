@@ -1255,10 +1255,10 @@ io.on('connection', (socket) => {
     const room = findByToken(socket.data.token);
     if (!room) return fail(socket, 'Комната не найдена');
     if (room.game === 'cinema') return;
-    if (roleOf(room, socket.data.token) !== 'host') return fail(socket, 'Новый раунд запускает хост');
+    if (!roleOf(room, socket.data.token)) return fail(socket, 'Комната не найдена');
     if (room.phase !== 'done') return fail(socket, 'Раунд ещё не закончен');
     returnToLobby(room);
-    pushChat(room, 'system', 'Хост открыл лобби. Можно поменять правила и начать заново.');
+    pushChat(room, 'system', 'Лобби открыто. Можно поменять правила и начать заново.');
     broadcast(room);
   });
 
