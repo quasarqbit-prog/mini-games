@@ -227,6 +227,117 @@ async function main() {
   cinemaHost.close();
   cinemaGuest.close();
 
+  const battleHost = connect('battle-host');
+  const battleGuest = connect('battle-guest');
+  await Promise.all([
+    new Promise((resolve) => battleHost.on('connect', resolve)),
+    new Promise((resolve) => battleGuest.on('connect', resolve)),
+  ]);
+  battleHost.emit('create', { game: 'battle' });
+  const sea = await battleHost.when((s) => s.game === 'battle' && s.phase === 'lobby' && s.you === 'host', 'battle lobby');
+  battleGuest.emit('join', { code: sea.code });
+  await battleGuest.when((s) => s.you === 'guest' && s.game === 'battle', 'battle join');
+  battleHost.emit('settings', { firstTurn: 'random' });
+  await battleHost.when((s) => s.settings?.firstTurn === 'random', 'battle random');
+  battleHost.emit('settings', { firstTurn: 'host' });
+  await battleHost.when((s) => s.settings?.firstTurn === 'host', 'battle host first');
+  battleHost.emit('start');
+  await battleHost.when((s) => s.phase === 'place', 'place');
+  const earlyReady = await new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(''), 1500);
+    battleHost.once('errorMsg', (payload) => {
+      clearTimeout(timer);
+      resolve(typeof payload === 'string' ? payload : payload.text);
+    });
+    battleHost.emit('battle:ready', { on: true });
+  });
+  assert(/флот/.test(earlyReady), `ready before fleet: ${earlyReady}`);
+  const hostFleet = [
+    { len: 4, r: 0, c: 0, dir: 'h' },
+    { len: 3, r: 2, c: 0, dir: 'h' },
+    { len: 3, r: 2, c: 4, dir: 'h' },
+    { len: 2, r: 4, c: 0, dir: 'h' },
+    { len: 2, r: 4, c: 3, dir: 'h' },
+    { len: 2, r: 4, c: 6, dir: 'h' },
+    { len: 1, r: 6, c: 0, dir: 'h' },
+    { len: 1, r: 6, c: 2, dir: 'h' },
+    { len: 1, r: 6, c: 4, dir: 'h' },
+    { len: 1, r: 6, c: 6, dir: 'h' },
+  ];
+  const guestFleet = [
+    { len: 4, r: 0, c: 6, dir: 'v' },
+    { len: 3, r: 0, c: 8, dir: 'v' },
+    { len: 3, r: 5, c: 0, dir: 'h' },
+    { len: 2, r: 5, c: 4, dir: 'h' },
+    { len: 2, r: 5, c: 7, dir: 'h' },
+    { len: 2, r: 7, c: 0, dir: 'h' },
+    { len: 1, r: 7, c: 3, dir: 'h' },
+    { len: 1, r: 7, c: 5, dir: 'h' },
+    { len: 1, r: 7, c: 7, dir: 'h' },
+    { len: 1, r: 9, c: 0, dir: 'h' },
+  ];
+  const touching = hostFleet.map((ship, index) => (index === 1 ? { len: 3, r: 0, c: 2, dir: 'h' } : { ...ship }));
+  const rejected = await new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(''), 1500);
+    battleHost.once('errorMsg', (payload) => {
+      clearTimeout(timer);
+      resolve(typeof payload === 'string' ? payload : payload.text);
+    });
+    battleHost.emit('battle:layout', { ships: touching });
+  });
+  assert(/поставить нельзя/.test(rejected), `touching ships: ${rejected}`);
+  battleHost.emit('battle:layout', { ships: hostFleet });
+  const placed = await battleHost.when((s) => s.yourFleet?.[0]?.r === 0 && s.yourFleet?.[0]?.c === 0, 'host fleet');
+  assert(placed.yourFleet.some((ship) => ship.len === 4 && ship.r === 0 && ship.c === 0), 'host sees own ship');
+  battleGuest.emit('battle:layout', { ships: guestFleet });
+  const hidden = await battleGuest.when((s) => s.yourFleet?.[0]?.c === 6, 'guest fleet');
+  assert(!hidden.yourFleet.some((ship) => ship.r === 0 && ship.c === 0), 'guest fleet is not the host fleet');
+  assert(hidden.fleet == null && hidden.target == null, 'opponent ships are not in the payload');
+  battleHost.emit('battle:ready', { on: true });
+  await battleHost.when((s) => s.youReady && !s.readyAt, 'host ready');
+  battleHost.emit('battle:ready', { on: false });
+  await battleHost.when((s) => !s.youReady, 'host unready');
+  battleHost.emit('battle:ready', { on: true });
+  battleGuest.emit('battle:ready', { on: true });
+  const armed = await battleHost.when((s) => s.readyAt && s.youReady && s.opponentReady, 'countdown');
+  assert(armed.phase === 'place', 'countdown stays in placement');
+  battleHost.emit('battle:ready', { on: false });
+  await battleHost.when((s) => !s.youReady && !s.readyAt && s.phase === 'place', 'countdown cancelled');
+  battleHost.emit('battle:ready', { on: true });
+  await battleHost.when((s) => s.readyAt && s.phase === 'place', 'countdown again');
+  const started = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('timeout: battle start')), 7000);
+    const onState = (state) => {
+      if (state.phase !== 'play') return;
+      clearTimeout(timer);
+      battleHost.off('state', onState);
+      resolve(state);
+    };
+    battleHost.on('state', onState);
+  });
+  assert(started.turn === 'host', 'host shoots first');
+  battleHost.emit('battle:shot', { r: 9, c: 9 });
+  const missed = await battleGuest.when((s) => s.turn === 'guest' && s.incoming.some((shot) => shot.r === 9 && shot.c === 9 && shot.mark === 'miss'), 'miss');
+  assert(missed.turn === 'guest', 'miss gives the turn away');
+  for (const col of [0, 1, 2, 3]) battleGuest.emit('battle:shot', { r: 0, c: col });
+  const sunk = await battleHost.when((s) => s.incoming.filter((shot) => shot.mark === 'sunk').length === 4, 'sunk');
+  assert(sunk.incoming.some((shot) => shot.mark === 'miss' && shot.r === 1 && shot.c === 0), 'water around a sunk ship');
+  assert(sunk.turn === 'guest', 'a hit keeps the turn');
+  assert(sunk.yourFleet.some((ship) => ship.r === 2 && ship.c === 0), 'owner still sees an unhit ship');
+  const secret = await battleGuest.when((s) => s.yourShots.filter((shot) => shot.mark === 'sunk').length === 4, 'shooter sees sunk');
+  assert(!secret.yourFleet.some((ship) => ship.r === 2 && ship.c === 0), 'shooter does not see the hidden ship');
+  const blocked = await new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(''), 1500);
+    battleHost.once('errorMsg', (payload) => {
+      clearTimeout(timer);
+      resolve(typeof payload === 'string' ? payload : payload.text);
+    });
+    battleHost.emit('battle:shot', { r: 5, c: 0 });
+  });
+  assert(/ход соперника/.test(blocked), `shot out of turn: ${blocked}`);
+  battleHost.close();
+  battleGuest.close();
+
   console.log('smoke ok', created.code);
 
 function theatreWaitId(snapshot) {

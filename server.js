@@ -340,6 +340,7 @@ function broadcastOnline() {
 
 function publicView(room, token) {
   if (room.game === 'cinema') return cinemaView(room, token);
+  if (room.game === 'battle') return battleView(room, token);
   const you = roleOf(room, token);
   const player = (slot) => (slot ? {
     connected: Boolean(slot.connected),
@@ -415,14 +416,205 @@ function closeRoom(room, message) {
 
 function returnToLobby(room) {
   room.phase = 'lobby';
+  room.winner = null;
+  room.turn = 'host';
+  room.deadline = null;
+  if (room.game === 'battle') {
+    room.fleet = { host: null, guest: null };
+    room.ready = { host: false, guest: false };
+    room.readyAt = null;
+    room.shots = { host: [], guest: [] };
+    room.firstPlayer = 'host';
+    return;
+  }
   room.target = { host: null, guest: null };
   room.submitted = { host: false, guest: false };
   room.boards = { host: [], guest: [] };
   room.drafts = { host: '', guest: '' };
   room.fixedLength = null;
-  room.deadline = null;
+}
+
+function emptyBattle(code) {
+  return {
+    code,
+    game: 'battle',
+    phase: 'lobby',
+    host: null,
+    guest: null,
+    chat: [],
+    chatSeq: 1,
+    chatTimes: new Map(),
+    settings: { firstTurn: 'host' },
+    fleet: { host: null, guest: null },
+    ready: { host: false, guest: false },
+    readyAt: null,
+    shots: { host: [], guest: [] },
+    turn: 'host',
+    firstPlayer: 'host',
+    winner: null,
+    deadline: null,
+  };
+}
+
+function shipCells(ship) {
+  if (ship.r == null || ship.c == null) return [];
+  const cells = [];
+  for (let i = 0; i < ship.len; i += 1) {
+    cells.push([
+      ship.r + (ship.dir === 'v' ? i : 0),
+      ship.c + (ship.dir === 'h' ? i : 0),
+    ]);
+  }
+  return cells;
+}
+
+function fleetGeometryOk(ships) {
+  const groups = ships.map((ship) => shipCells(ship));
+  for (const cells of groups) {
+    for (const [r, c] of cells) {
+      if (r < 0 || c < 0 || r > 9 || c > 9) return false;
+    }
+  }
+  for (let a = 0; a < groups.length; a += 1) {
+    for (let b = a + 1; b < groups.length; b += 1) {
+      for (const [r1, c1] of groups[a]) {
+        for (const [r2, c2] of groups[b]) {
+          if (Math.max(Math.abs(r1 - r2), Math.abs(c1 - c2)) < 2) return false;
+        }
+      }
+    }
+  }
+  return true;
+}
+
+function parseFleet(raw, full) {
+  if (!Array.isArray(raw) || raw.length !== 10) return null;
+  const expected = [4, 3, 3, 2, 2, 2, 1, 1, 1, 1];
+  const ships = [];
+  for (let i = 0; i < 10; i += 1) {
+    const item = raw[i] || {};
+    if (Number(item.len) !== expected[i]) return null;
+    const dir = item.dir === 'v' ? 'v' : 'h';
+    const placed = item.r != null && item.r !== '' && item.c != null && item.c !== '';
+    if (!placed) {
+      if (full) return null;
+      ships.push({ len: expected[i], r: null, c: null, dir });
+      continue;
+    }
+    const r = Number(item.r);
+    const c = Number(item.c);
+    if (!Number.isInteger(r) || !Number.isInteger(c)) return null;
+    ships.push({ len: expected[i], r, c, dir });
+  }
+  if (!fleetGeometryOk(ships.filter((ship) => ship.r != null))) return null;
+  return ships;
+}
+
+function shipSunk(shots, ship) {
+  return shipCells(ship).every(([r, c]) => shots.some((shot) => shot.hit && shot.r === r && shot.c === c));
+}
+
+function shipHalo(ship) {
+  const body = new Set(shipCells(ship).map(([r, c]) => `${r},${c}`));
+  const extra = [];
+  const seen = new Set();
+  for (const [r, c] of shipCells(ship)) {
+    for (let dr = -1; dr <= 1; dr += 1) {
+      for (let dc = -1; dc <= 1; dc += 1) {
+        const rr = r + dr;
+        const cc = c + dc;
+        const key = `${rr},${cc}`;
+        if (rr < 0 || cc < 0 || rr > 9 || cc > 9 || body.has(key) || seen.has(key)) continue;
+        seen.add(key);
+        extra.push([rr, cc]);
+      }
+    }
+  }
+  return extra;
+}
+
+function describeShots(shots, fleet) {
+  const ships = fleet || [];
+  return shots.map((shot) => {
+    if (!shot.hit) return { r: shot.r, c: shot.c, mark: 'miss' };
+    const ship = ships.find((item) => shipCells(item).some(([r, c]) => r === shot.r && c === shot.c));
+    return { r: shot.r, c: shot.c, mark: ship && shipSunk(shots, ship) ? 'sunk' : 'hit' };
+  });
+}
+
+function battleView(room, token) {
+  const you = roleOf(room, token);
+  const foe = you ? otherRole(you) : null;
+  const player = (slot) => (slot ? {
+    connected: Boolean(slot.connected),
+    name: slot.name || '',
+    avatar: slot.avatar || '',
+  } : null);
+  return {
+    code: room.code,
+    game: 'battle',
+    phase: room.phase,
+    you,
+    host: player(room.host),
+    guest: player(room.guest),
+    settings: room.settings,
+    youReady: you ? Boolean(room.ready[you]) : false,
+    opponentReady: you ? Boolean(room.ready[foe]) : false,
+    readyAt: room.readyAt,
+    serverNow: Date.now(),
+    yourFleet: you && room.fleet[you] ? room.fleet[you] : null,
+    yourShots: you ? describeShots(room.shots[you], foe ? room.fleet[foe] : []) : [],
+    incoming: you ? describeShots(room.shots[foe], room.fleet[you]) : [],
+    turn: room.turn,
+    winner: room.winner,
+    chat: room.chat,
+  };
+}
+
+function battleSettings(raw) {
+  return { firstTurn: raw?.firstTurn === 'random' ? 'random' : 'host' };
+}
+
+function createBattle(socket) {
+  const already = findByToken(socket.data.token);
+  if (already) {
+    attach(socket, already);
+    return;
+  }
+  if (rooms.size > 500) return fail(socket, 'Слишком много комнат, попробуй позже');
+  const room = emptyBattle(makeCode());
+  room.host = { token: socket.data.token, connected: true, socketId: socket.id };
+  applyProfile(room.host);
+  rooms.set(room.code, room);
+  socket.join(room.code);
+  pushChat(room, 'system', 'Комната морского боя создана. Скинь код другу.');
+  broadcast(room);
+}
+
+function startBattle(room) {
+  room.settings = battleSettings(room.settings);
+  room.phase = 'place';
+  room.fleet = { host: null, guest: null };
+  room.ready = { host: false, guest: false };
+  room.readyAt = null;
+  room.shots = { host: [], guest: [] };
   room.winner = null;
   room.turn = 'host';
+  pushChat(room, 'system', 'Расставьте корабли. Между ними нужна пустая клетка. Когда оба нажмут «Готово», начнётся отсчёт.');
+  broadcast(room);
+}
+
+function cancelBattleStart(room) {
+  if (!room.readyAt) return;
+  room.readyAt = null;
+  pushChat(room, 'system', 'Старт отменён.');
+}
+
+function armBattleStart(room) {
+  if (!(room.ready.host && room.ready.guest)) return;
+  rollFirst(room);
+  room.readyAt = Date.now() + 4000;
+  pushChat(room, 'system', 'Оба готовы. Старт через 4 секунды.');
 }
 
 const CINEMA_LIMIT = 12;
@@ -797,6 +989,7 @@ io.on('connection', (socket) => {
 
   socket.on('create', ({ game } = {}) => {
     if (game === 'cinema') return createCinema(socket);
+    if (game === 'battle') return createBattle(socket);
     if (game !== 'wordle') return fail(socket, 'Такой игры пока нет');
     const already = findByToken(socket.data.token);
     if (already) {
@@ -846,6 +1039,7 @@ io.on('connection', (socket) => {
     if (roleOf(room, socket.data.token) !== 'host') return fail(socket, 'Начать игру может только хост');
     if (room.phase !== 'lobby') return fail(socket, 'Игра уже началась');
     if (!room.guest?.connected) return fail(socket, 'Сначала пусть друг введёт код комнаты');
+    if (room.game === 'battle') return startBattle(room);
     room.settings = sanitizeSettings(room.settings);
     if (room.settings.timerOn && timerMs(room.settings) <= 0) {
       return fail(socket, 'Укажи время на ход');
@@ -859,8 +1053,7 @@ io.on('connection', (socket) => {
 
   socket.on('setWord', ({ word } = {}) => {
     const room = findByToken(socket.data.token);
-    if (!room) return fail(socket, 'Комната не найдена');
-    if (room.game === 'cinema') return;
+    if (!room || room.game !== 'wordle') return fail(socket, room ? 'Сейчас не время загадывать слово' : 'Комната не найдена');
     const role = roleOf(room, socket.data.token);
     if (room.phase !== 'setup') return fail(socket, 'Сейчас не время загадывать слово');
     if (room.submitted[role]) return fail(socket, 'Слово уже загадано');
@@ -886,8 +1079,7 @@ io.on('connection', (socket) => {
 
   socket.on('guess', ({ word } = {}) => {
     const room = findByToken(socket.data.token);
-    if (!room) return fail(socket, 'Комната не найдена');
-    if (room.game === 'cinema') return;
+    if (!room || room.game !== 'wordle') return fail(socket, room ? 'Игра ещё не идёт' : 'Комната не найдена');
     const role = roleOf(room, socket.data.token);
     if (room.phase !== 'play') return fail(socket, 'Игра ещё не идёт');
     if (room.turn !== role) return fail(socket, 'Сейчас ход соперника');
@@ -925,13 +1117,18 @@ io.on('connection', (socket) => {
     if (room.game === 'cinema') return;
     if (roleOf(room, socket.data.token) !== 'host') return fail(socket, 'Настройки меняет хост');
     if (room.phase !== 'lobby') return fail(socket, 'Настройки можно менять только в лобби');
+    if (room.game === 'battle') {
+      room.settings = battleSettings(raw);
+      broadcast(room);
+      return;
+    }
     room.settings = sanitizeSettings(raw);
     broadcast(room);
   });
 
   socket.on('draft', ({ word } = {}) => {
     const room = findByToken(socket.data.token);
-    if (!room || room.game === 'cinema' || room.phase !== 'play' || room.settings.hidden) return;
+    if (!room || room.game !== 'wordle' || room.phase !== 'play' || room.settings.hidden) return;
     const role = roleOf(room, socket.data.token);
     if (room.turn !== role || !room.target[role]) return;
     const secret = room.target[role];
@@ -983,6 +1180,74 @@ io.on('connection', (socket) => {
     if (!payload.text && !payload.image && !payload.sticker) return;
     if (!allowChat(room, role, socket)) return;
     pushChat(room, role, payload.text, payload);
+    broadcast(room);
+  });
+
+  socket.on('battle:layout', ({ ships } = {}) => {
+    const room = findByToken(socket.data.token);
+    if (!room || room.game !== 'battle') return;
+    const role = roleOf(room, socket.data.token);
+    if (!role || room.phase !== 'place') return fail(socket, 'Сейчас не расстановка');
+    if (room.ready[role]) return fail(socket, 'Сначала отмени готовность');
+    const fleet = parseFleet(ships, false);
+    if (!fleet) return fail(socket, 'Так корабли поставить нельзя');
+    room.fleet[role] = fleet;
+    broadcast(room);
+  });
+
+  socket.on('battle:ready', ({ on } = {}) => {
+    const room = findByToken(socket.data.token);
+    if (!room || room.game !== 'battle') return;
+    const role = roleOf(room, socket.data.token);
+    if (!role || room.phase !== 'place') return fail(socket, 'Сейчас не расстановка');
+    if (!on) {
+      room.ready[role] = false;
+      cancelBattleStart(room);
+      broadcast(room);
+      return;
+    }
+    const fleet = parseFleet(room.fleet[role], true);
+    if (!fleet) return fail(socket, 'Сначала поставь весь флот: линкор, два крейсера, три эсминца и четыре катера');
+    room.fleet[role] = fleet;
+    room.ready[role] = true;
+    if (room.ready.host && room.ready.guest) armBattleStart(room);
+    else pushChat(room, 'system', `${playerLabel(room, role)} готов.`);
+    broadcast(room);
+  });
+
+  socket.on('battle:shot', ({ r, c } = {}) => {
+    const room = findByToken(socket.data.token);
+    if (!room || room.game !== 'battle') return;
+    const role = roleOf(room, socket.data.token);
+    if (!role) return;
+    if (room.phase !== 'play') return fail(socket, 'Бой ещё не начался');
+    if (room.turn !== role) return fail(socket, 'Сейчас ход соперника');
+    const foe = otherRole(role);
+    if (!room[role]?.connected || !room[foe]?.connected) {
+      return fail(socket, 'Соперник отключился. Подожди, пока он вернётся.');
+    }
+    const row = Number(r);
+    const col = Number(c);
+    if (!Number.isInteger(row) || !Number.isInteger(col) || row < 0 || col < 0 || row > 9 || col > 9) return;
+    if (room.shots[role].some((shot) => shot.r === row && shot.c === col)) return fail(socket, 'Сюда уже стреляли');
+    const fleet = room.fleet[foe] || [];
+    const ship = fleet.find((item) => shipCells(item).some(([sr, sc]) => sr === row && sc === col));
+    room.shots[role].push({ r: row, c: col, hit: Boolean(ship) });
+    if (ship && shipSunk(room.shots[role], ship)) {
+      for (const [rr, cc] of shipHalo(ship)) {
+        if (!room.shots[role].some((shot) => shot.r === rr && shot.c === cc)) {
+          room.shots[role].push({ r: rr, c: cc, hit: false });
+        }
+      }
+    }
+    if (fleet.length && fleet.every((item) => item.r != null && shipSunk(room.shots[role], item))) {
+      room.phase = 'done';
+      room.winner = role;
+      room.turn = null;
+      pushChat(room, 'system', `${playerLabel(room, role)} потопил весь флот.`);
+    } else if (!ship) {
+      room.turn = foe;
+    }
     broadcast(room);
   });
 
@@ -1115,6 +1380,10 @@ io.on('connection', (socket) => {
     if (!role || room[role].socketId !== socket.id) return;
     room[role].connected = false;
     room[role].disconnectedAt = Date.now();
+    if (room.game === 'battle' && room.phase === 'place' && room.readyAt) {
+      room.ready[role] = false;
+      cancelBattleStart(room);
+    }
     broadcast(room);
   });
 });
@@ -1139,6 +1408,24 @@ setInterval(() => {
       }
       continue;
     }
+    if (room.game === 'battle') {
+      if (room.phase === 'place' && room.readyAt && now >= room.readyAt) {
+        const live = room.ready.host && room.ready.guest && room.host?.connected && room.guest?.connected;
+        room.readyAt = null;
+        if (live) {
+          room.phase = 'play';
+          room.turn = room.firstPlayer || 'host';
+          pushChat(room, 'system', `Бой начался. Первый ход — у ${playerLabel(room, room.turn)}.`);
+        } else {
+          if (room.host && !room.host.connected) room.ready.host = false;
+          if (room.guest && !room.guest.connected) room.ready.guest = false;
+          pushChat(room, 'system', 'Старт отменён.');
+        }
+        broadcast(room);
+      }
+      continue;
+    }
+    if (room.game !== 'wordle') continue;
     if (room.phase === 'play' && room.deadline && now >= room.deadline) {
       const skipped = room.turn;
       room.turn = otherRole(skipped);

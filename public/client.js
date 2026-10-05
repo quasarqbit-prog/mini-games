@@ -63,6 +63,11 @@ let stickChat = true;
 let focusKind = null;
 let popRole = null;
 let mobilePane = 'mine';
+let lobbyTab = 'chat';
+let lobbyUnread = 0;
+let fleetDraft = null;
+let fleetSelect = 0;
+let fleetHover = null;
 let pendingPane = null;
 let chatUnread = 0;
 let chatNotice = '';
@@ -431,7 +436,7 @@ function homeHtml() {
   }
   return `
     <section class="home">
-      <p class="lead">Открой Wordle или кинотеатр и скинь ссылку другу. Он попадёт в ту же комнату.</p>
+      <p class="lead">Открой Wordle, морской бой или кинотеатр и скинь ссылку другу. Он попадёт в ту же комнату.</p>
       <form class="join" data-act="join">
         <label for="room-code">Код комнаты</label>
         <input id="room-code" maxlength="8" autocomplete="off" placeholder="ABCDE" ${connected ? '' : 'disabled'}>
@@ -443,6 +448,12 @@ function homeHtml() {
           <div class="tiles-preview"><i class="g"></i><i class="y"></i><i class="a"></i><i class="g"></i><i class="a"></i></div>
           <h2>Wordle</h2>
           <p>Загадайте слово друг другу и угадывайте по очереди. Кто первый угадает — победил.</p>
+          <span class="tag">2 игрока</span>
+        </button>
+        <button class="game-card" type="button" data-act="create" data-game="battle" ${connected ? '' : 'disabled'}>
+          <div class="sea-preview" aria-hidden="true"><i class="ship"></i><i></i><i class="hit"></i><i></i><i class="ship"></i><i></i><i class="miss"></i><i></i><i class="ship"></i></div>
+          <h2>Морской бой</h2>
+          <p>Расставьте флот и стреляйте по полю соперника. Попадание даёт ещё один ход.</p>
           <span class="tag">2 игрока</span>
         </button>
         <button class="game-card" type="button" data-act="create" data-game="cinema" ${connected ? '' : 'disabled'}>
@@ -484,9 +495,23 @@ function lobbyHtml() {
           : `<button class="btn" type="button" disabled>Ждём, пока хост начнёт</button>`}
         <button class="btn ghost" type="button" data-act="leave">Выйти</button>
       </div>
-      ${rulesHtml()}
-      ${chatHtml(true)}
+      ${lobbyPanes(isHost)}
     </section>`;
+}
+
+function lobbyPanes(isHost) {
+  const rules = rulesHtml();
+  const chat = chatHtml();
+  if (!isHost) return `${rules}${chat}`;
+  const tab = lobbyTab === 'settings' ? 'settings' : 'chat';
+  const badge = lobbyUnread ? ` <i class="badge">${lobbyUnread}</i>` : '';
+  return `
+    <div class="lobby-switch">
+      <button type="button" class="lobby-tab${tab === 'chat' ? ' on' : ''}" data-act="lobby-tab" data-tab="chat">Чат${badge}</button>
+      <button type="button" class="lobby-tab${tab === 'settings' ? ' on' : ''}" data-act="lobby-tab" data-tab="settings">Настройки</button>
+    </div>
+    <div class="lobby-pane"${tab === 'chat' ? '' : ' hidden'}>${chat}</div>
+    <div class="lobby-pane"${tab === 'settings' ? '' : ' hidden'}>${rules}</div>`;
 }
 
 function lengthHint(settings) {
@@ -509,7 +534,28 @@ function rulesSummary(settings) {
   return `Буквы: ${letters}. ${time}. ${hidden}. ${first}.`;
 }
 
+function battleRulesHtml() {
+  const first = state.settings?.firstTurn === 'random' ? 'первый ход случайный' : 'первый ход у хоста';
+  const text = 'Флот: линкор на 4 клетки, два крейсера на 3, три эсминца на 2 и четыре катера. Корабли стоят прямо и не касаются даже углом. Мимо — ход сопернику, попадание — ещё выстрел.';
+  if (state.you !== 'host') {
+    return `<section class="rules"><h3>Правила</h3><p class="note">${escapeHtml(text)} ${escapeHtml(first)}.</p></section>`;
+  }
+  return `
+    <section class="rules">
+      <h3>Настройки</h3>
+      <div class="rule">
+        <p>Первый ход</p>
+        <div class="seg">
+          <button type="button" class="${state.settings?.firstTurn !== 'random' ? 'on' : ''}" data-act="setting" data-key="firstTurn" data-value="host">Хост</button>
+          <button type="button" class="${state.settings?.firstTurn === 'random' ? 'on' : ''}" data-act="setting" data-key="firstTurn" data-value="random">Случайно</button>
+        </div>
+      </div>
+      <p class="note">${escapeHtml(text)}</p>
+    </section>`;
+}
+
 function rulesHtml() {
+  if (state.game === 'battle') return battleRulesHtml();
   const settings = state.settings;
   if (state.you !== 'host') {
     return `<section class="rules"><h3>Правила хоста</h3><p class="note">${escapeHtml(rulesSummary(settings))}</p></section>`;
@@ -758,6 +804,246 @@ function gameHtml() {
     </section>`;
 }
 
+const SEA_LETTERS = 'АБВГДЕЖЗИК';
+const FLEET_PLAN = [4, 3, 3, 2, 2, 2, 1, 1, 1, 1];
+
+function freshFleet() {
+  return FLEET_PLAN.map((len) => ({ len, r: null, c: null, dir: 'h' }));
+}
+
+function shipCellsOf(ship) {
+  if (!ship || ship.r == null || ship.c == null) return [];
+  const cells = [];
+  for (let i = 0; i < ship.len; i += 1) {
+    cells.push([ship.r + (ship.dir === 'v' ? i : 0), ship.c + (ship.dir === 'h' ? i : 0)]);
+  }
+  return cells;
+}
+
+function fleetGeometryOk(ships) {
+  const groups = ships.map((ship) => shipCellsOf(ship));
+  for (const cells of groups) {
+    for (const [r, c] of cells) {
+      if (r < 0 || c < 0 || r > 9 || c > 9) return false;
+    }
+  }
+  for (let a = 0; a < groups.length; a += 1) {
+    for (let b = a + 1; b < groups.length; b += 1) {
+      for (const [r1, c1] of groups[a]) {
+        for (const [r2, c2] of groups[b]) {
+          if (Math.max(Math.abs(r1 - r2), Math.abs(c1 - c2)) < 2) return false;
+        }
+      }
+    }
+  }
+  return true;
+}
+
+function syncFleetDraft(prev, next) {
+  if (next.game !== 'battle' || next.phase !== 'place') {
+    fleetHover = null;
+    return;
+  }
+  const entered = !prev || prev.game !== 'battle' || prev.phase !== 'place' || prev.code !== next.code;
+  if (entered) {
+    fleetSelect = 0;
+    fleetHover = null;
+  }
+  fleetDraft = Array.isArray(next.yourFleet) ? next.yourFleet.map((ship) => ({ ...ship })) : (entered || !fleetDraft ? freshFleet() : fleetDraft);
+}
+
+function sendLayout() {
+  socket.emit('battle:layout', { ships: fleetDraft });
+}
+
+function rotatePlacement() {
+  if (state?.game !== 'battle' || state.phase !== 'place' || state.youReady) return;
+  const ship = fleetDraft?.[fleetSelect];
+  if (!ship) return;
+  const next = { ...ship, dir: ship.dir === 'h' ? 'v' : 'h' };
+  if (ship.r != null) {
+    const trial = fleetDraft.map((item, i) => (i === fleetSelect ? next : item)).filter((item) => item.r != null);
+    if (!fleetGeometryOk(trial)) return;
+  }
+  fleetDraft[fleetSelect] = next;
+  sendLayout();
+  render();
+}
+
+function placeAt(r, c) {
+  if (state?.game !== 'battle' || state.phase !== 'place' || state.youReady || !fleetDraft) return;
+  const hit = fleetDraft.findIndex((ship) => shipCellsOf(ship).some(([rr, cc]) => rr === r && cc === c));
+  if (hit >= 0) {
+    fleetSelect = hit;
+    fleetDraft[hit] = { ...fleetDraft[hit], r: null, c: null };
+    sendLayout();
+    render();
+    return;
+  }
+  const ship = fleetDraft[fleetSelect];
+  if (!ship) return;
+  const next = { ...ship, r, c };
+  const trial = fleetDraft.map((item, i) => (i === fleetSelect ? next : item)).filter((item) => item.r != null);
+  if (!fleetGeometryOk(trial)) return;
+  fleetDraft[fleetSelect] = next;
+  const nxt = fleetDraft.findIndex((item) => item.r == null);
+  if (nxt >= 0) fleetSelect = nxt;
+  sendLayout();
+  render();
+}
+
+function shipTitle(ship, index) {
+  const names = { 4: 'Линкор', 3: 'Крейсер', 2: 'Эсминец', 1: 'Катер' };
+  const same = fleetDraft.filter((item) => item.len === ship.len);
+  const n = fleetDraft.slice(0, index + 1).filter((item) => item.len === ship.len).length;
+  return same.length > 1 ? `${names[ship.len]} ${n}` : names[ship.len];
+}
+
+function ghostMark(r, c) {
+  const ship = fleetDraft?.[fleetSelect];
+  if (!fleetHover || !ship || state?.youReady || state?.phase !== 'place') return '';
+  const ghost = { ...ship, r: fleetHover.r, c: fleetHover.c };
+  const cells = shipCellsOf(ghost);
+  if (!cells.some(([rr, cc]) => rr === r && cc === c)) return '';
+  const trial = fleetDraft.map((item, i) => (i === fleetSelect ? ghost : item)).filter((item) => item.r != null);
+  const ok = fleetGeometryOk(trial);
+  return ok ? ' preview-ok' : ' preview-bad';
+}
+
+function seaCell(kind, r, c) {
+  const placing = state.phase === 'place' && kind === 'mine';
+  const own = placing ? fleetDraft : (state.yourFleet || []);
+  const shipHere = (own || []).some((ship) => shipCellsOf(ship).some(([rr, cc]) => rr === r && cc === c));
+  const shots = kind === 'mine' ? state.incoming : state.yourShots;
+  const shot = (shots || []).find((item) => item.r === r && item.c === c);
+  let cls = 'sea-cell';
+  if (kind === 'mine' && shipHere) cls += ' ship';
+  if (shot) cls += ` ${shot.mark}`;
+  if (placing) cls += ghostMark(r, c);
+  const canPlace = placing && !state.youReady;
+  const canShoot = kind === 'foe' && state.phase === 'play' && state.turn === state.you && !shot;
+  if (canPlace) return `<button type="button" class="${cls}" data-act="place" data-r="${r}" data-c="${c}"></button>`;
+  if (canShoot) return `<button type="button" class="${cls} aim" data-act="shot" data-r="${r}" data-c="${c}"></button>`;
+  return `<button type="button" class="${cls} locked" tabindex="-1" disabled></button>`;
+}
+
+function seaGrid(kind) {
+  let html = `<div class="sea-wrap"><div class="sea ${kind}">`;
+  html += '<i></i>';
+  for (let c = 0; c < 10; c += 1) html += `<i>${SEA_LETTERS[c]}</i>`;
+  for (let r = 0; r < 10; r += 1) {
+    html += `<i>${r + 1}</i>`;
+    for (let c = 0; c < 10; c += 1) html += seaCell(kind, r, c);
+  }
+  html += '</div></div>';
+  return html;
+}
+
+function fleetDock() {
+  if (state.phase !== 'place') return '';
+  const buttons = (fleetDraft || []).map((ship, index) => {
+    const placed = ship.r != null;
+    return `<button type="button" class="${index === fleetSelect ? 'on' : ''}${placed ? ' placed' : ''}" data-act="pick" data-i="${index}">${shipTitle(ship, index)}</button>`;
+  }).join('');
+  const ready = state.youReady
+    ? '<button class="btn ghost" type="button" data-act="ready" data-on="0">Отменить готовность</button>'
+    : '<button class="btn" type="button" data-act="ready" data-on="1">Готово</button>';
+  return `
+    <div class="fleet-dock">${buttons}</div>
+    <div class="place-tools">
+      <button class="btn ghost" type="button" data-act="rotate">Повернуть</button>
+      ${ready}
+    </div>
+    <p class="note">На телефоне поверни кнопкой. На компьютере ещё и клавишей R.</p>`;
+}
+
+function battleSide(kind) {
+  const mine = kind === 'mine';
+  const title = mine ? 'Твоё поле' : 'Поле соперника';
+  const foeNote = !mine && state.phase === 'place'
+    ? `<p class="note">${state.opponentReady ? 'Соперник готов' : 'Соперник расставляет корабли'}</p>`
+    : '';
+  const active = state.phase === 'play' && ((mine && state.turn && state.turn !== state.you) || (!mine && state.turn === state.you));
+  return `
+    <section class="side${mine ? ' is-mine' : ' is-theirs'}${active ? ' is-turn' : ''}">
+      <div class="side-head"><h2>${title}</h2></div>
+      <div class="side-body">
+        ${foeNote}
+        ${seaGrid(kind)}
+        ${mine ? fleetDock() : ''}
+      </div>
+    </section>`;
+}
+
+function battleGameHtml() {
+  let turnText = 'Расставьте корабли';
+  let turnClass = '';
+  let clock = '';
+  if (state.phase === 'place') {
+    if (state.readyAt) {
+      turnText = 'Старт через';
+      turnClass = ' you';
+      clock = `<div class="clock" data-deadline="${state.readyAt}">${formatLeft(state.readyAt)}</div>`;
+    } else if (state.youReady) {
+      turnText = 'Ты готов';
+      turnClass = ' you';
+    } else if (state.opponentReady) {
+      turnText = 'Соперник готов';
+    }
+  } else if (state.phase === 'play') {
+    if (state.turn === state.you) {
+      turnText = 'Твой выстрел';
+      turnClass = ' you';
+    } else {
+      turnText = `Ход: ${displayName(state.turn)}`;
+    }
+  } else if (state.phase === 'done') {
+    turnText = state.winner === state.you ? 'Ты победил' : `Победил ${displayName(state.winner)}`;
+    turnClass = ' you';
+  }
+  const again = state.phase === 'done' && state.you === 'host'
+    ? '<button class="btn" type="button" data-act="again">Сыграть ещё</button>'
+    : '';
+  const wait = state.phase === 'done' && state.you !== 'host'
+    ? '<p class="note">Ждём, пока хост откроет лобби</p>'
+    : '';
+  const chatLabel = chatUnread ? `Чат <i class="badge">${chatUnread}</i>` : 'Чат';
+  const chatNote = chatUnread && mobilePane !== 'chat'
+    ? `<button type="button" class="chat-note" data-act="pane" data-pane="chat">${escapeHtml(chatNotice || 'Новое сообщение в чате')}</button>`
+    : '';
+  const confirm = pendingPane
+    ? `<div class="turn-confirm"><p>${pendingPane === 'theirs' ? 'Твой ход. Перейти к полю соперника?' : 'Ход соперника. Посмотреть своё поле?'}</p><button type="button" class="btn" data-act="confirm-pane">Перейти</button></div>`
+    : '';
+  return `
+    <section class="game-screen">
+      <div class="mobile-tabs">
+        <button type="button" class="${mobilePane === 'mine' ? 'on' : ''}" data-act="pane" data-pane="mine">Своё поле</button>
+        <button type="button" class="${mobilePane === 'theirs' ? 'on' : ''}" data-act="pane" data-pane="theirs">Поле соперника</button>
+        <button type="button" class="${mobilePane === 'chat' ? 'on' : ''}" data-act="pane" data-pane="chat">${chatLabel}</button>
+      </div>
+      ${chatNote}
+      <div class="game-top">
+        <div class="pill">
+          <span>Код</span>
+          <strong>${escapeHtml(state.code)}</strong>
+          <button class="btn" type="button" data-act="copy">Скопировать</button>
+        </div>
+        <div class="turn-wrap">
+          <div class="turn${turnClass}">${turnText}</div>
+          ${clock}
+          ${wait}
+        </div>
+        <div class="top-actions">${again}<button class="btn ghost" type="button" data-act="leave">Выйти</button></div>
+      </div>
+      <div class="game-grid" data-pane="${mobilePane}">
+        ${battleSide('mine')}
+        ${chatHtml()}
+        ${battleSide('foe')}
+      </div>
+      ${confirm}
+    </section>`;
+}
+
 function render() {
   if (state?.game === 'cinema') {
     renderCinema();
@@ -768,7 +1054,14 @@ function render() {
   document.body.classList.remove('in-cinema');
   document.body.classList.toggle('in-game', Boolean(state && state.phase !== 'lobby'));
   renderHeader();
-  view.innerHTML = state ? (state.phase === 'lobby' ? lobbyHtml() : gameHtml()) : homeHtml();
+  const page = !state
+    ? homeHtml()
+    : state.phase === 'lobby'
+      ? lobbyHtml()
+      : state.game === 'battle'
+        ? battleGameHtml()
+        : gameHtml();
+  view.innerHTML = page;
   restoreForm();
   paintPicker();
 }
@@ -879,6 +1172,33 @@ document.addEventListener('click', (event) => {
   if (act === 'start') socket.emit('start');
   if (act === 'leave') socket.emit('leave');
   if (act === 'again') socket.emit('again');
+  if (act === 'lobby-tab') {
+    lobbyTab = el.dataset.tab === 'settings' ? 'settings' : 'chat';
+    if (lobbyTab === 'chat') lobbyUnread = 0;
+    render();
+    return;
+  }
+  if (act === 'rotate') {
+    rotatePlacement();
+    return;
+  }
+  if (act === 'ready') {
+    socket.emit('battle:ready', { on: el.dataset.on === '1' });
+    return;
+  }
+  if (act === 'pick') {
+    fleetSelect = Number(el.dataset.i) || 0;
+    render();
+    return;
+  }
+  if (act === 'place') {
+    placeAt(Number(el.dataset.r), Number(el.dataset.c));
+    return;
+  }
+  if (act === 'shot') {
+    socket.emit('battle:shot', { r: Number(el.dataset.r), c: Number(el.dataset.c) });
+    return;
+  }
   if (act === 'key') typeLetter(el.dataset.key);
   if (act === 'backspace') {
     draft = draft.slice(0, -1);
@@ -1130,7 +1450,15 @@ document.addEventListener('change', async (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
-  if (!state || state.phase !== 'play') return;
+  if ((event.key === 'r' || event.key === 'R' || event.key === 'к' || event.key === 'К') && state?.game === 'battle' && state.phase === 'place') {
+    const tag = document.activeElement?.tagName;
+    if (tag !== 'INPUT' && tag !== 'TEXTAREA') {
+      event.preventDefault();
+      rotatePlacement();
+    }
+    return;
+  }
+  if (!state || state.phase !== 'play' || state.game === 'battle') return;
   const tag = document.activeElement?.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA') return;
   if (event.key === 'Enter') {
@@ -1177,9 +1505,50 @@ socket.on('online', (list) => {
   if (!state && !booting) render();
 });
 
+function handleBattleState(next) {
+  const prev = state?.game === 'battle' ? state : null;
+  booting = false;
+  if (prev && prev.code === next.code) {
+    const prevLast = prev.chat.at(-1)?.id || 0;
+    const fresh = next.chat.filter((msg) => msg.id > prevLast && msg.from !== 'system' && msg.from !== next.you);
+    if (fresh.length) {
+      playChatSound();
+      if (next.you === 'host' && next.phase === 'lobby' && lobbyTab !== 'chat') lobbyUnread += fresh.length;
+      if (window.matchMedia('(max-width: 800px)').matches && mobilePane !== 'chat' && next.phase !== 'lobby') {
+        chatUnread += fresh.length;
+        const last = fresh.at(-1);
+        chatNotice = `${last.name || 'Сообщение'}: ${last.text || 'Вложение'}`;
+      }
+    }
+  }
+  if (next.phase === 'place' && (!prev || prev.phase !== 'place')) mobilePane = 'mine';
+  if (next.phase === 'play' && (!prev || prev.phase !== 'play' || prev.turn !== next.turn)) {
+    const target = next.turn === next.you ? 'theirs' : 'mine';
+    pendingPane = mobilePane === target ? null : target;
+  }
+  if (next.phase !== 'play') pendingPane = null;
+  if (inviteCode && next.code === inviteCode) inviteCode = '';
+  syncFleetDraft(prev, next);
+  state = next;
+  render();
+}
+
+function paintFleetPreview() {
+  document.querySelectorAll('.sea.mine [data-r]').forEach((button) => {
+    button.classList.remove('preview-ok', 'preview-bad');
+    const mark = ghostMark(Number(button.dataset.r), Number(button.dataset.c));
+    if (mark.includes('preview-ok')) button.classList.add('preview-ok');
+    if (mark.includes('preview-bad')) button.classList.add('preview-bad');
+  });
+}
+
 socket.on('state', (next) => {
   if (next?.game === 'cinema') {
     handleCinemaState(next);
+    return;
+  }
+  if (next?.game === 'battle') {
+    handleBattleState(next);
     return;
   }
   const prev = state;
@@ -1197,6 +1566,7 @@ socket.on('state', (next) => {
     const fresh = next.chat.filter((msg) => msg.id > prevLast && msg.from !== 'system' && msg.from !== next.you);
     if (fresh.length) {
       playChatSound();
+      if (next.you === 'host' && next.phase === 'lobby' && lobbyTab !== 'chat') lobbyUnread += fresh.length;
       if (window.matchMedia('(max-width: 800px)').matches && mobilePane !== 'chat') {
         chatUnread += fresh.length;
         const last = fresh.at(-1);
@@ -1224,6 +1594,9 @@ socket.on('closed', ({ message }) => {
   pendingPane = null;
   chatUnread = 0;
   chatNotice = '';
+  lobbyTab = 'chat';
+  lobbyUnread = 0;
+  fleetDraft = null;
   render();
   toast(message || 'Комната закрыта');
 });
@@ -1239,6 +1612,23 @@ socket.on('errorMsg', (payload) => {
 });
 
 render();
+
+view.addEventListener('mouseover', (event) => {
+  const cell = event.target.closest?.('[data-act="place"]');
+  if (!cell || state?.game !== 'battle' || state.phase !== 'place' || state.youReady) return;
+  const r = Number(cell.dataset.r);
+  const c = Number(cell.dataset.c);
+  if (fleetHover && fleetHover.r === r && fleetHover.c === c) return;
+  fleetHover = { r, c };
+  paintFleetPreview();
+});
+
+view.addEventListener('mouseout', (event) => {
+  if (!fleetHover || !event.target.closest?.('[data-act="place"]')) return;
+  if (event.relatedTarget?.closest?.('[data-act="place"]')) return;
+  fleetHover = null;
+  paintFleetPreview();
+});
 
 setInterval(() => {
   document.querySelectorAll('.clock').forEach((el) => {
