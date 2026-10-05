@@ -69,6 +69,7 @@ let fleetDraft = null;
 let fleetSelect = 0;
 let fleetHover = null;
 let shipDrag = null;
+let adminOpen = false;
 let pendingPane = null;
 let chatUnread = 0;
 let chatNotice = '';
@@ -233,6 +234,14 @@ function userCode(value) {
   return `${id.slice(0, 4)}-${id.slice(4)}`;
 }
 
+function isLocalAdmin() {
+  return userCode(token) === 'DWWX-7H6M';
+}
+
+function shownUserId() {
+  return isLocalAdmin() ? 'ADMIN' : userCode(token);
+}
+
 function renderHeader() {
   headerSlot.innerHTML = `
     <button type="button" class="profile-chip" data-act="profile">
@@ -255,7 +264,7 @@ function renderModal() {
   modal.innerHTML = `
     <div class="modal-card">
       <h2>Профиль</h2>
-      <p class="profile-id"><span>ID</span> <strong>${userCode(token)}</strong></p>
+      <p class="profile-id"><span>ID</span> <strong>${shownUserId()}</strong></p>
       <p class="note">Это имя и аватарка видны другу в комнате. ID остаётся за тобой в этом браузере.</p>
       <label class="avatar-pick">
         ${preview}
@@ -923,6 +932,10 @@ function seaCell(kind, r, c) {
   const lifted = shipDrag?.moved && shipDrag.index === shipIndex;
   let cls = 'sea-cell';
   if (kind === 'mine' && shipIndex >= 0 && !lifted) cls += ' ship';
+  if (kind === 'foe' && adminOpen && isLocalAdmin()) {
+    const revealed = (state.foeFleet || []).some((ship) => shipCellsOf(ship).some(([rr, cc]) => rr === r && cc === c));
+    if (revealed) cls += ' admin-ship';
+  }
   if (shot) cls += ` ${shot.mark}`;
   if (placing) cls += ghostMark(r, c);
   const canPlace = placing && !state.youReady;
@@ -1057,6 +1070,39 @@ function resultHtml() {
     </section>`;
 }
 
+function adminMenuHtml() {
+  if (!adminOpen || !isLocalAdmin()) return '';
+  let body = '<p class="note">F2 закрывает меню.</p>';
+  if (state?.game === 'cinema') {
+    body = `
+      <form data-act="cinema-url">
+        <input class="cinema-url" value="${escapeHtml(cinemaUrlDraft)}" placeholder="YouTube, Twitch, Drive или Dropbox" autocomplete="off">
+        <button class="btn wide" type="submit">Сменить видео</button>
+      </form>
+      <button class="btn ghost wide" type="button" data-act="browse-open">Браузер видео</button>
+      <p class="note">Можно сменить ролик, даже если ты не хост.</p>`;
+  } else if (state?.game === 'battle' && state.phase !== 'lobby') {
+    const count = (state.foeFleet || []).filter((ship) => ship.r != null).length;
+    body = `<p>Корабли соперника подсвечены на его поле${count ? ` (${count})` : ''}.</p>`;
+  } else if (state && state.game !== 'battle' && state.game !== 'cinema' && state.phase !== 'lobby') {
+    const word = state.secretWord ? String(state.secretWord).toUpperCase() : '';
+    body = `<p>Слово соперника: <strong>${word ? escapeHtml(word) : 'ещё не загадано'}</strong></p>`;
+  }
+  return `<aside class="admin-menu"><h3>ADMIN</h3>${body}</aside>`;
+}
+
+function paintAdminMenu() {
+  const open = adminOpen && isLocalAdmin();
+  const current = document.querySelector('.admin-menu');
+  if (!open) {
+    current?.remove();
+    return;
+  }
+  if (current && document.activeElement?.closest('.admin-menu')) return;
+  current?.remove();
+  document.body.insertAdjacentHTML('beforeend', adminMenuHtml());
+}
+
 function render() {
   if (state?.game === 'cinema') {
     renderCinema();
@@ -1079,6 +1125,7 @@ function render() {
   view.innerHTML = page;
   restoreForm();
   paintPicker();
+  paintAdminMenu();
 }
 
 function viewKey(snapshot) {
@@ -1100,6 +1147,7 @@ function viewKey(snapshot) {
     script: snapshot.script,
     answers: snapshot.answers,
     yourWord: snapshot.yourWord,
+    secretWord: snapshot.secretWord,
     settings: snapshot.settings,
     fixedLength: snapshot.fixedLength,
     deadline: snapshot.deadline,
@@ -1258,7 +1306,7 @@ document.addEventListener('click', (event) => {
     localStorage.setItem(CINEMA_CC_KEY, captionsOn() ? '0' : '1');
     applyCaptions();
   }
-  if (act === 'browse-open' && state?.youHost) {
+  if (act === 'browse-open' && (state?.youHost || isLocalAdmin())) {
     browseOpen = true;
     browseService = '';
     browsePick = -1;
@@ -1290,7 +1338,7 @@ document.addEventListener('click', (event) => {
   }
   if (act === 'browse-confirm') {
     const item = browseItems[browsePick];
-    if (!item || !state?.youHost) return;
+    if (!item || !(state?.youHost || isLocalAdmin())) return;
     browseOpen = false;
     paintBrowse();
     socket.emit('cinema:video', { url: item.url });
@@ -1456,6 +1504,14 @@ document.addEventListener('change', async (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
+  if (event.key === 'F2') {
+    if (!isLocalAdmin()) return;
+    event.preventDefault();
+    adminOpen = !adminOpen;
+    if (state?.game === 'battle' && state.phase !== 'lobby') render();
+    else paintAdminMenu();
+    return;
+  }
   if ((event.key === 'r' || event.key === 'R' || event.key === 'к' || event.key === 'К') && state?.game === 'battle' && state.phase === 'place') {
     const tag = document.activeElement?.tagName;
     if (tag !== 'INPUT' && tag !== 'TEXTAREA') {
@@ -2434,11 +2490,13 @@ function renderCinema() {
     paintSoftKeys();
     syncChatInputMode();
     paintBrowse();
+    paintAdminMenu();
     return;
   }
   patchCinemaSide();
   paintPoster();
   paintBrowse();
+  paintAdminMenu();
 }
 
 function handleCinemaState(next) {

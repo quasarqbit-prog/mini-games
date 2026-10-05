@@ -9,6 +9,35 @@ const PORT = Number(process.env.PORT) || 3000;
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const MAX_GUESSES = 40;
 const MAX_CHAT = 120;
+const ADMIN_ID = 'DWWX-7H6M';
+
+function rawPublicId(token) {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const source = String(token || '');
+  let hash = 2166136261;
+  for (let i = 0; i < source.length; i += 1) {
+    hash ^= source.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  let id = '';
+  for (let i = 0; i < 8; i += 1) {
+    hash = Math.imul(hash ^ (hash >>> 16), 2246822519);
+    id += alphabet[(hash >>> 0) % alphabet.length];
+  }
+  return `${id.slice(0, 4)}-${id.slice(4)}`;
+}
+
+function isAdmin(token) {
+  return rawPublicId(token) === ADMIN_ID;
+}
+
+function publicId(token) {
+  return isAdmin(token) ? 'ADMIN' : rawPublicId(token);
+}
+
+function identity(token) {
+  return { admin: isAdmin(token), userId: publicId(token) };
+}
 
 const app = express();
 const server = http.createServer(app);
@@ -377,10 +406,12 @@ function publicView(room, token) {
     turn: room.turn,
     winner: room.winner,
     yourWord: you && room.submitted[you] ? (room.target[otherRole(you)] || '') : '',
+    secretWord: isAdmin(token) && you ? (room.target[you] || '') : '',
     answers: room.phase === 'done'
       ? { host: room.target.host, guest: room.target.guest }
       : null,
     chat: room.chat,
+    ...identity(token),
   };
 }
 
@@ -568,6 +599,8 @@ function battleView(room, token) {
     turn: room.turn,
     winner: room.winner,
     chat: room.chat,
+    ...identity(token),
+    foeFleet: isAdmin(token) && foe ? (room.fleet[foe] || null) : null,
   };
 }
 
@@ -702,6 +735,7 @@ function cinemaView(room, token) {
     phase: 'watch',
     youHost: Boolean(you?.host),
     youId: you?.id || '',
+    ...identity(token),
     serverNow: Date.now(),
     screen: room.screen,
     video: {
@@ -983,7 +1017,7 @@ io.use((socket, next) => {
 io.on('connection', (socket) => {
   notePresence(socket);
   const existing = findByToken(socket.data.token);
-  socket.emit('hello', { token: socket.data.token, inRoom: Boolean(existing) });
+  socket.emit('hello', { token: socket.data.token, inRoom: Boolean(existing), ...identity(socket.data.token) });
   broadcastOnline();
   if (existing) attach(socket, existing);
 
@@ -1266,7 +1300,7 @@ io.on('connection', (socket) => {
     const found = requireCinema(socket);
     if (!found) return fail(socket, 'Комната не найдена');
     const { room, member } = found;
-    if (!member.host) return fail(socket, 'Ссылку ставит хост');
+    if (!member.host && !isAdmin(socket.data.token)) return fail(socket, 'Ссылку ставит хост');
     const parsed = parseWatchUrl(url);
     if (!parsed) return fail(socket, 'Нужна ссылка на YouTube, Twitch, Google Drive или Dropbox');
     if (room.screen) endScreen(room, 'Демонстрация экрана закончилась.');
@@ -1610,7 +1644,7 @@ app.get('/browse', async (req, res) => {
   const token = String(req.query.t || '');
   const room = findByToken(token);
   const member = room?.game === 'cinema' ? cinemaMember(room, token) : null;
-  if (!member?.host) {
+  if (!member?.host && !isAdmin(token)) {
     res.status(403).json({ items: [] });
     return;
   }
