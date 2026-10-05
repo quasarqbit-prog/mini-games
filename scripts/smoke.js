@@ -164,13 +164,14 @@ async function main() {
   const watching = await cinemaGuest.when((s) => s.game === 'cinema' && !s.youHost && s.members.length === 2, 'cinema guest');
   assert(watching.phase === 'watch', 'no lobby');
   cinemaHost.emit('cinema:video', { url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' });
-  const queued = await cinemaGuest.when((s) => s.video?.id === 'dQw4w9WgXcQ' && s.video.playing, 'video');
+  const queued = await cinemaGuest.when((s) => s.video?.id === 'dQw4w9WgXcQ', 'video');
+  assert(queued.video.playing === false, 'starts paused');
   assert(queued.video.at === 0, 'starts together');
   cinemaHost.emit('cinema:pause', { time: 0 });
   await cinemaGuest.when((s) => s.video && !s.video.playing, 'pause');
   cinemaHost.emit('cinema:seek', { time: 12.2 });
   const sought = await cinemaGuest.when((s) => s.video && s.video.at >= 12, 'seek');
-  assert(sought.chat.some((msg) => /перемотал/.test(msg.text)), 'seek notice');
+  assert(!sought.chat.some((msg) => /перемотал|пауз/.test(msg.text)), 'no playback chatter');
   cinemaGuest.emit('cinema:seek', { time: 30 });
   const deniedSeek = await new Promise((resolve) => {
     const timer = setTimeout(() => resolve(''), 800);

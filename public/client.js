@@ -929,7 +929,13 @@ document.addEventListener('click', (event) => {
   if (act === 'hud-pause') hudTogglePause();
   if (act === 'hud-seek') hudSeek(Number(el.dataset.by) || 0);
   if (act === 'stage-full') toggleCinemaFull();
-  if (act === 'fs-chat') document.querySelector('.cinema')?.classList.toggle('side-open');
+  if (act === 'fs-chat') {
+    const root = document.querySelector('.cinema');
+    if (!root) return;
+    root.classList.toggle('side-open');
+    if (!root.classList.contains('side-open')) root.classList.remove('keys-open');
+  }
+  if (act === 'soft-key') pressSoftKey(el.dataset.key || '');
   if (act === 'emoji-open') {
     emojiOpen = !emojiOpen;
     if (emojiOpen) pickerTab = pickerTab || 'emoji';
@@ -946,6 +952,11 @@ document.addEventListener('click', (event) => {
     paintPicker();
   }
   if (act === 'emoji-cat') {
+    const cats = el.closest('.emoji-cats');
+    if (cats?.dataset.skip) {
+      delete cats.dataset.skip;
+      return;
+    }
     emojiCat = Number(el.dataset.cat) || 0;
     emojiQuery = '';
     const search = document.querySelector('.emoji-search');
@@ -1205,6 +1216,28 @@ setInterval(() => {
 let swipe = null;
 
 document.addEventListener('pointerdown', (event) => {
+  if (event.target.closest?.('[data-act="soft-key"]')) event.preventDefault();
+}, true);
+
+document.addEventListener('focusin', (event) => {
+  const input = event.target.closest?.('.cinema .chat-input');
+  if (!input || !mobileCinemaFull()) return;
+  input.blur();
+  if (document.querySelector('.cinema.side-open')) {
+    document.querySelector('.cinema')?.classList.add('keys-open');
+    paintSoftKeys();
+  }
+});
+
+document.addEventListener('pointerdown', (event) => {
+  const chatInput = event.target.closest?.('.cinema .chat-input');
+  if (chatInput && mobileCinemaFull()) {
+    event.preventDefault();
+    if (document.querySelector('.cinema.side-open')) document.querySelector('.cinema')?.classList.add('keys-open');
+    paintSoftKeys();
+  } else if (document.querySelector('.cinema.keys-open') && !event.target.closest('.soft-keys, .cinema-side, .chat-input')) {
+    document.querySelector('.cinema')?.classList.remove('keys-open');
+  }
   const Ctx = window.AudioContext || window.webkitAudioContext;
   if (Ctx) {
     if (!audioCtx) audioCtx = new Ctx();
@@ -1376,6 +1409,7 @@ function paintPicker() {
       <input class="emoji-search" placeholder="Поиск" value="${escapeHtml(emojiQuery)}" autocomplete="off">
       <div class="emoji-cats"></div>
       <div class="emoji-grid"></div>`;
+    bindCatDrag(body.querySelector('.emoji-cats'));
   }
   if (!emojiPack) {
     const grid = body.querySelector('.emoji-grid');
@@ -1387,6 +1421,33 @@ function paintPicker() {
     return;
   }
   paintEmojiGrid();
+}
+
+function bindCatDrag(scroller) {
+  if (!scroller || scroller.dataset.drag) return;
+  scroller.dataset.drag = '1';
+  let drag = null;
+  scroller.addEventListener('pointerdown', (event) => {
+    if (event.pointerType !== 'mouse' || event.button !== 0) return;
+    drag = { x: event.clientX, left: scroller.scrollLeft, moved: false, id: event.pointerId };
+    scroller.setPointerCapture(event.pointerId);
+  });
+  scroller.addEventListener('pointermove', (event) => {
+    if (!drag || event.pointerId !== drag.id) return;
+    const dx = event.clientX - drag.x;
+    if (Math.abs(dx) > 6) drag.moved = true;
+    if (drag.moved) scroller.scrollLeft = drag.left - dx;
+  });
+  const end = (event) => {
+    if (!drag || event.pointerId !== drag.id) return;
+    if (drag.moved) {
+      scroller.dataset.skip = '1';
+      setTimeout(() => { delete scroller.dataset.skip; }, 0);
+    }
+    drag = null;
+  };
+  scroller.addEventListener('pointerup', end);
+  scroller.addEventListener('pointercancel', end);
 }
 
 function paintEmojiGrid() {
@@ -1424,6 +1485,14 @@ let cinemaUrlDraft = '';
 let cinemaMounted = '';
 let cinemaClockOffset = 0;
 let hudScrub = false;
+let ytRevealedId = '';
+let softLayout = 'ru';
+let softShift = false;
+const floaterSeen = new Set();
+const SOFT_ROWS = {
+  ru: ['йцукенгшщзхъ', 'фывапролджэ', 'ячсмитьбюё'],
+  en: ['qwertyuiop', 'asdfghjkl', 'zxcvbnm'],
+};
 let ytPlayer = null;
 let ytReady = null;
 let twitchPlayer = null;
@@ -1520,6 +1589,105 @@ function coarsePointer() {
   return window.matchMedia('(hover: none), (pointer: coarse)').matches;
 }
 
+function cinemaFullscreenRoot() {
+  const active = document.fullscreenElement || document.webkitFullscreenElement;
+  return active?.classList?.contains('cinema') ? active : null;
+}
+
+function mobileCinemaFull() {
+  return Boolean(cinemaFullscreenRoot() && coarsePointer());
+}
+
+function paintPoster() {
+  const video = state?.video;
+  const poster = document.querySelector('.yt-poster');
+  if (video?.id && video.playing && video.kind !== 'twitch' && video.kind !== 'file') ytRevealedId = video.id;
+  if (!poster) return;
+  const cover = Boolean(video?.id && !video.playing && ytRevealedId !== video.id && !state?.screen);
+  poster.hidden = !cover;
+}
+
+function syncChatInputMode() {
+  const input = document.querySelector('.cinema .chat-input');
+  const soft = mobileCinemaFull();
+  if (input) {
+    input.readOnly = soft;
+    input.inputMode = soft ? 'none' : 'text';
+  }
+  if (!soft) document.querySelector('.cinema')?.classList.remove('keys-open');
+}
+
+function paintSoftKeys() {
+  const board = document.querySelector('.soft-keys');
+  if (!board) return;
+  const rows = SOFT_ROWS[softLayout] || SOFT_ROWS.ru;
+  const letter = (char) => (softShift ? char.toUpperCase() : char);
+  const rowHtml = (chars) => `<div class="soft-row">${Array.from(chars).map((char) => `<button type="button" data-act="soft-key" data-key="${letter(char)}">${letter(char)}</button>`).join('')}</div>`;
+  board.innerHTML = `
+    ${rows.map(rowHtml).join('')}
+    <div class="soft-row">${['.', ',', '?', '!', '-', ':'].map((char) => `<button type="button" data-act="soft-key" data-key="${char}">${char}</button>`).join('')}</div>
+    <div class="soft-row soft-tools">
+      <button type="button" class="${softShift ? 'on' : ''}" data-act="soft-key" data-key="shift">Shift</button>
+      <button type="button" data-act="soft-key" data-key="lang">${softLayout === 'ru' ? 'RU' : 'EN'}</button>
+      <button type="button" class="soft-space" data-act="soft-key" data-key="space">Пробел</button>
+      <button type="button" data-act="soft-key" data-key="back">⌫</button>
+    </div>`;
+}
+
+function pressSoftKey(key) {
+  const input = document.querySelector('.cinema .chat-input');
+  if (!input) return;
+  if (key === 'shift') {
+    softShift = !softShift;
+    paintSoftKeys();
+    return;
+  }
+  if (key === 'lang') {
+    softLayout = softLayout === 'ru' ? 'en' : 'ru';
+    softShift = false;
+    paintSoftKeys();
+    return;
+  }
+  if (key === 'back') {
+    input.value = Array.from(input.value).slice(0, -1).join('');
+    return;
+  }
+  if (key === 'space') key = ' ';
+  const max = Number(input.maxLength) || 400;
+  if (Array.from(input.value).length >= max) return;
+  input.value += key;
+  if (softShift && key.trim()) {
+    softShift = false;
+    paintSoftKeys();
+  }
+}
+
+function pushFloater(msg) {
+  const host = document.querySelector('.fs-float');
+  if (!host) return;
+  const body = msg.text || (msg.sticker ? 'Стикер' : (msg.image ? 'Фото' : ''));
+  if (!body) return;
+  const line = document.createElement('div');
+  line.className = 'fs-float-line';
+  line.textContent = `${messageName(msg)}: ${body}`.slice(0, 180);
+  host.appendChild(line);
+  while (host.children.length > 4) host.firstElementChild.remove();
+  setTimeout(() => line.classList.add('out'), 3000);
+  setTimeout(() => line.remove(), 3800);
+}
+
+function noteFloaters(prev, next) {
+  const messages = next?.chat || [];
+  const sameRoom = prev && prev.code === next.code;
+  if (!sameRoom) floaterSeen.clear();
+  const show = sameRoom && mobileCinemaFull() && !document.querySelector('.cinema.side-open');
+  for (const msg of messages) {
+    if (msg.id == null || floaterSeen.has(msg.id)) continue;
+    floaterSeen.add(msg.id);
+    if (show && !msg.system) pushFloater(msg);
+  }
+}
+
 function toggleHud(el) {
   if (!coarsePointer()) return;
   el.closest('.stage-frame')?.classList.toggle('hud-on');
@@ -1603,13 +1771,13 @@ function cinemaHtml() {
     stage = '<video class="screen-video" autoplay playsinline></video>';
   } else if (state.video?.kind === 'twitch' && state.video.clip) {
     const parent = encodeURIComponent(location.hostname);
-    stage = `<iframe class="twitch-clip" src="https://clips.twitch.tv/embed?clip=${encodeURIComponent(state.video.id)}&parent=${parent}&autoplay=true"></iframe>`;
+    stage = `<iframe class="twitch-clip" src="https://clips.twitch.tv/embed?clip=${encodeURIComponent(state.video.id)}&parent=${parent}&autoplay=false"></iframe>`;
   } else if (state.video?.kind === 'twitch' && state.video.id) {
     stage = '<div id="tw-player"></div><p class="stage-error" hidden></p>';
   } else if (state.video?.kind === 'file' && state.video.id) {
     stage = '<video class="cloud-video" playsinline></video><p class="stage-error" hidden></p>';
   } else if (state.video?.id) {
-    stage = '<div id="yt-player"></div><p class="stage-error" hidden></p>';
+    stage = `<img class="yt-poster" alt="" src="https://i.ytimg.com/vi/${encodeURIComponent(state.video.id)}/hqdefault.jpg"><div id="yt-player"></div><p class="stage-error" hidden></p>`;
   } else {
     stage = `
       <div class="source-box">
@@ -1631,12 +1799,9 @@ function cinemaHtml() {
           </select>` : ''}
           ${showVolume ? `<label class="hud-volume"><span>Громкость</span><input class="cinema-volume" type="range" min="0" max="100" value="${volume}"></label>` : ''}
         </div>
-        <button class="hud-btn hud-fs" type="button" data-act="stage-full" aria-label="На весь экран">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 9V4h5v2H6v3H4zm10-5h5v5h-2V6h-3V4zM4 15h2v3h3v2H4v-5zm14 3h-3v2h5v-5h-2v3z"/></svg>
-        </button>
       </div>
-      ${timeline ? `<div class="hud-bottom">
-        <div class="hud-actions">
+      <div class="hud-bottom">
+        ${timeline ? `<div class="hud-actions">
           <button class="hud-btn hud-pause" type="button" data-act="hud-pause" aria-label="Пауза">
             <svg class="icon-pause" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>
             <svg class="icon-play" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
@@ -1648,16 +1813,25 @@ function cinemaHtml() {
           <span class="hud-now">0:00</span>
           <input class="hud-scrub" type="range" min="0" max="1000" value="0" aria-label="Таймлайн" ${host ? '' : 'disabled'}>
           <span class="hud-dur">–:––</span>
-        </div>
-      </div>` : ''}
+          <button class="hud-btn hud-fs" type="button" data-act="stage-full" aria-label="На весь экран">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 9V4h5v2H6v3H4zm10-5h5v5h-2V6h-3V4zM4 15h2v3h3v2H4v-5zm14 3h-3v2h5v-5h-2v3z"/></svg>
+          </button>
+        </div>` : `<div class="hud-line">
+          <button class="hud-btn hud-fs" type="button" data-act="stage-full" aria-label="На весь экран">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 9V4h5v2H6v3H4zm10-5h5v5h-2V6h-3V4zM4 15h2v3h3v2H4v-5zm14 3h-3v2h5v-5h-2v3z"/></svg>
+          </button>
+        </div>`}
+      </div>
     </div>` : '';
   return `
     <section class="cinema">
       <div class="stage">
         <div class="stage-frame">${stage}${hud}</div>
         <div class="fs-edge" aria-hidden="true"></div>
+        <div class="fs-float" aria-live="polite"></div>
+        <div class="soft-keys" aria-label="Клавиатура"></div>
         <button class="fs-toggle" type="button" data-act="fs-chat" aria-label="Чат">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M15.4 5.4 9.8 11l5.6 5.6L14 18l-7-7 7-7z"/></svg>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 4v-4H6a2 2 0 0 1-2-2V5z"/></svg>
         </button>
       </div>
       <aside class="cinema-side">
@@ -1719,9 +1893,13 @@ function renderCinema() {
     if (log) log.scrollTop = log.scrollHeight;
     mountCinemaStage();
     paintPicker();
+    paintPoster();
+    paintSoftKeys();
+    syncChatInputMode();
     return;
   }
   patchCinemaSide();
+  paintPoster();
 }
 
 function handleCinemaState(next) {
@@ -1739,6 +1917,7 @@ function handleCinemaState(next) {
   }
   state = next;
   renderCinema();
+  noteFloaters(prev, next);
   syncYouTube();
   if (next.screen && !next.youHost) ensureWatching();
   if (!next.screen) closeWatch();
@@ -1791,20 +1970,30 @@ function mountCinemaStage() {
     destroyYouTube();
     ytPlayer = new YT.Player('yt-player', {
       videoId: state.video.id,
-      host: 'https://www.youtube.com',
+      host: 'https://www.youtube-nocookie.com',
       playerVars: {
-        autoplay: 1,
+        autoplay: 0,
         controls: 0,
         disablekb: 1,
         fs: 0,
         rel: 0,
         modestbranding: 1,
         iv_load_policy: 3,
+        cc_load_policy: 0,
         playsinline: 1,
+        autohide: 1,
+        showinfo: 0,
         origin: location.origin,
       },
       events: {
-        onReady: () => {
+        onReady: (event) => {
+          const frame = event.target?.getIframe?.();
+          if (frame) {
+            frame.style.setProperty('pointer-events', 'none', 'important');
+            frame.style.setProperty('z-index', '0', 'important');
+            frame.setAttribute('tabindex', '-1');
+            frame.setAttribute('allow', 'autoplay; encrypted-media; picture-in-picture');
+          }
           applyCinemaVolume();
           applyCinemaQuality();
           syncYouTube(true);
@@ -1859,7 +2048,7 @@ function mountTwitch() {
       width: '100%',
       height: '100%',
       parent: [location.hostname],
-      autoplay: true,
+      autoplay: Boolean(state.video.live),
       controls: false,
     };
     if (state.video.live) options.channel = state.video.id;
@@ -1899,16 +2088,15 @@ function mountCloud() {
   node.addEventListener('loadeddata', () => syncYouTube(true));
 }
 
-function noteMediaPlay(time) {
-  if (!state?.video?.id || state.screen || state.video.live) return;
-  ytSawPlayback = true;
+function noteMediaPlay() {
+  if (!state?.video?.id || state.screen || state.video.live || !state.video.playing) return;
   if (remoteAction || document.hidden) return;
-  if (!state.video.playing) socket.emit('cinema:play', { time });
+  ytSawPlayback = true;
 }
 
 function noteMediaPause(time) {
   if (!state?.video?.id || state.screen || state.video.live) return;
-  if (remoteAction || document.hidden || !ytSawPlayback) return;
+  if (remoteAction || document.hidden || !ytSawPlayback || coarsePointer()) return;
   if (state.video.playing || state.video.pauseAt != null) socket.emit('cinema:pause', { time });
 }
 
@@ -2222,6 +2410,11 @@ setInterval(() => {
   if (state?.game === 'cinema') paintHud();
 }, 500);
 
-document.addEventListener('fullscreenchange', () => {
-  if (!document.fullscreenElement) document.querySelector('.cinema')?.classList.remove('side-open');
-});
+function onCinemaFullChange() {
+  if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+    document.querySelector('.cinema')?.classList.remove('side-open', 'keys-open');
+  }
+  syncChatInputMode();
+}
+document.addEventListener('fullscreenchange', onCinemaFullChange);
+document.addEventListener('webkitfullscreenchange', onCinemaFullChange);

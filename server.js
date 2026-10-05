@@ -660,13 +660,6 @@ function watchLabel(parsed) {
   return 'видео';
 }
 
-function fmtMedia(seconds) {
-  const whole = Math.max(0, Math.floor(Number(seconds) || 0));
-  const mins = Math.floor(whole / 60);
-  const secs = whole % 60;
-  return `${mins}:${String(secs).padStart(2, '0')}`;
-}
-
 function attachCinema(socket, room) {
   const member = cinemaMember(room, socket.data.token);
   if (!member) return;
@@ -1021,7 +1014,7 @@ io.on('connection', (socket) => {
       live: parsed.live,
       clip: parsed.clip,
       upstream: parsed.upstream,
-      playing: true,
+      playing: Boolean(parsed.live),
       updatedAt: now,
     };
     pushChat(room, 'system', `${cinemaName(member)} включил ${watchLabel(parsed)}.`);
@@ -1031,25 +1024,22 @@ io.on('connection', (socket) => {
   socket.on('cinema:pause', ({ time } = {}) => {
     const found = requireCinema(socket);
     if (!found) return;
-    const { room, member } = found;
+    const { room } = found;
     if (!room.video.id || room.screen || room.video.live) return;
     const now = Date.now();
     const shared = mediaNow(room.video, now);
     const reported = Math.max(0, Number(time) || 0);
     if (reported < shared - 1) {
       freezeVideo(room.video, shared, now);
-      pushChat(room, 'system', `${cinemaName(member)} поставил на паузу.`);
     } else {
       const pauseAt = Math.max(reported, shared);
       if (pauseAt - shared < 0.4) {
         freezeVideo(room.video, pauseAt, now);
-        pushChat(room, 'system', `${cinemaName(member)} поставил на паузу на ${fmtMedia(pauseAt)}.`);
       } else {
         room.video.playing = true;
         room.video.at = shared;
         room.video.updatedAt = now;
         room.video.pauseAt = pauseAt;
-        pushChat(room, 'system', `${cinemaName(member)} поставил паузу на ${fmtMedia(pauseAt)}. Кто отстаёт, досмотрит до этой секунды.`);
       }
     }
     broadcast(room);
@@ -1058,7 +1048,7 @@ io.on('connection', (socket) => {
   socket.on('cinema:play', () => {
     const found = requireCinema(socket);
     if (!found) return;
-    const { room, member } = found;
+    const { room } = found;
     if (!room.video.id || room.screen || room.video.live) return;
     const now = Date.now();
     const at = mediaNow(room.video, now);
@@ -1066,7 +1056,6 @@ io.on('connection', (socket) => {
     room.video.at = at;
     room.video.pauseAt = null;
     room.video.updatedAt = now;
-    pushChat(room, 'system', `${cinemaName(member)} продолжил просмотр.`);
     broadcast(room);
   });
 
@@ -1081,7 +1070,6 @@ io.on('connection', (socket) => {
     room.video.at = at;
     room.video.updatedAt = now;
     room.video.pauseAt = null;
-    pushChat(room, 'system', `${cinemaName(member)} перемотал на ${fmtMedia(at)}.`);
     broadcast(room);
   });
 
