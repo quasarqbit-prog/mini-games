@@ -163,6 +163,10 @@ async function main() {
   cinemaGuest.emit('join', { code: theatre.code });
   const watching = await cinemaGuest.when((s) => s.game === 'cinema' && !s.youHost && s.members.length === 2, 'cinema guest');
   assert(watching.phase === 'watch', 'no lobby');
+  const guestBrowse = await fetch(`http://127.0.0.1:${port}/browse?service=youtube&q=test&t=cinema-guest`);
+  assert(guestBrowse.status === 403, 'guest cannot browse');
+  const emptyBrowse = await fetch(`http://127.0.0.1:${port}/browse?service=youtube&q=&t=cinema-host`);
+  assert(emptyBrowse.status === 400, 'empty browse query');
   cinemaHost.emit('cinema:video', { url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' });
   const queued = await cinemaGuest.when((s) => s.video?.id === 'dQw4w9WgXcQ', 'video');
   assert(queued.video.playing === false, 'starts paused');

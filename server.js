@@ -1216,6 +1216,135 @@ function pipeCloudResponse(response, res) {
   Readable.fromWeb(response.body).pipe(res);
 }
 
+const browseHits = new Map();
+
+function allowBrowse(token) {
+  const now = Date.now();
+  const hits = (browseHits.get(token) || []).filter((at) => now - at < 60000);
+  if (hits.length >= 20) return false;
+  hits.push(now);
+  browseHits.set(token, hits);
+  return true;
+}
+
+function youtubeText(node) {
+  if (!node) return '';
+  if (typeof node.simpleText === 'string') return node.simpleText;
+  return (node.runs || []).map((part) => part.text || '').join('');
+}
+
+async function searchYouTube(query) {
+  const response = await fetch('https://www.youtube.com/youtubei/v1/search?prettyPrint=false', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'user-agent': 'Mozilla/5.0' },
+    body: JSON.stringify({
+      context: { client: { clientName: 'WEB', clientVersion: '2.20241001.00.00', hl: 'ru', gl: 'RU' } },
+      query,
+    }),
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!response.ok) return [];
+  const data = await response.json();
+  const items = [];
+  const walk = (node) => {
+    if (!node || typeof node !== 'object' || items.length >= 12) return;
+    const video = node.videoRenderer;
+    if (video?.videoId && /^[\w-]{11}$/.test(video.videoId)) {
+      const title = youtubeText(video.title).replace(/\s+/g, ' ').trim().slice(0, 140);
+      const thumbs = video.thumbnail?.thumbnails || [];
+      if (title && !items.some((item) => item.id === video.videoId)) {
+        items.push({
+          id: video.videoId,
+          title,
+          author: youtubeText(video.ownerText).replace(/\s+/g, ' ').trim().slice(0, 80),
+          thumb: thumbs.at(-1)?.url || `https://i.ytimg.com/vi/${video.videoId}/hqdefault.jpg`,
+          url: `https://www.youtube.com/watch?v=${video.videoId}`,
+          live: false,
+        });
+      }
+    }
+    const children = Array.isArray(node) ? node : Object.values(node);
+    children.forEach(walk);
+  };
+  walk(data);
+  return items;
+}
+
+async function searchTwitch(query) {
+  const response = await fetch('https://gql.twitch.tv/gql', {
+    method: 'POST',
+    headers: {
+      'client-id': 'kimne78kx3ncx6brgo4mv6wki5h1ko',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      query: `query ($q: String!) {
+        searchFor(platform: "web", userQuery: $q, options: { targets: [{ index: VOD }, { index: CHANNEL }] }) {
+          videos { items { id title owner { displayName } previewThumbnailURL(width: 320, height: 180) } }
+          channels { items { login displayName profileImageURL(width: 150) stream { id } } }
+        }
+      }`,
+      variables: { q: query },
+    }),
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!response.ok) return [];
+  const data = await response.json();
+  const found = data?.data?.searchFor || {};
+  const items = [];
+  for (const channel of found.channels?.items || []) {
+    if (!channel?.stream?.id || !/^[a-zA-Z0-9_]{3,25}$/.test(channel.login || '')) continue;
+    items.push({
+      id: channel.login.toLowerCase(),
+      title: String(channel.displayName || channel.login).slice(0, 80),
+      author: 'В эфире',
+      thumb: String(channel.profileImageURL || ''),
+      url: `https://www.twitch.tv/${channel.login.toLowerCase()}`,
+      live: true,
+    });
+    if (items.length >= 4) break;
+  }
+  for (const video of found.videos?.items || []) {
+    if (!/^\d+$/.test(String(video?.id || '')) || !video.title) continue;
+    items.push({
+      id: String(video.id),
+      title: String(video.title).replace(/\s+/g, ' ').trim().slice(0, 140),
+      author: String(video.owner?.displayName || '').slice(0, 80),
+      thumb: String(video.previewThumbnailURL || ''),
+      url: `https://www.twitch.tv/videos/${video.id}`,
+      live: false,
+    });
+    if (items.length >= 12) break;
+  }
+  return items;
+}
+
+app.get('/browse', async (req, res) => {
+  const token = String(req.query.t || '');
+  const room = findByToken(token);
+  const member = room?.game === 'cinema' ? cinemaMember(room, token) : null;
+  if (!member?.host) {
+    res.status(403).json({ items: [] });
+    return;
+  }
+  if (!allowBrowse(token)) {
+    res.status(429).json({ items: [], error: 'Слишком много запросов. Подожди минуту.' });
+    return;
+  }
+  const service = req.query.service === 'twitch' ? 'twitch' : req.query.service === 'youtube' ? 'youtube' : '';
+  const query = String(req.query.q || '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 80);
+  if (!service || !query) {
+    res.status(400).json({ items: [] });
+    return;
+  }
+  try {
+    const items = service === 'twitch' ? await searchTwitch(query) : await searchYouTube(query);
+    res.json({ items });
+  } catch {
+    res.status(502).json({ items: [], error: 'Поиск сейчас не отвечает.' });
+  }
+});
+
 app.get('/media/:code', async (req, res) => {
   const controller = new AbortController();
   req.on('close', () => controller.abort());

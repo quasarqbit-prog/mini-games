@@ -74,6 +74,13 @@ let replyDraft = null;
 let emojiOpen = false;
 let pickerTab = 'emoji';
 let stickerMenuId = '';
+let browseOpen = false;
+let browseService = '';
+let browseQuery = '';
+let browseItems = [];
+let browsePick = -1;
+let browseNote = '';
+let browseLoading = false;
 
 function toast(text) {
   const el = document.createElement('div');
@@ -756,6 +763,7 @@ function render() {
     renderCinema();
     return;
   }
+  browseOpen = false;
   captureForm();
   document.body.classList.remove('in-cinema');
   document.body.classList.toggle('in-game', Boolean(state && state.phase !== 'lobby'));
@@ -924,6 +932,43 @@ document.addEventListener('click', (event) => {
     localStorage.setItem(CINEMA_CC_KEY, captionsOn() ? '0' : '1');
     applyCaptions();
   }
+  if (act === 'browse-open' && state?.youHost) {
+    browseOpen = true;
+    browseService = '';
+    browsePick = -1;
+    browseItems = [];
+    browseNote = '';
+    paintBrowse();
+  }
+  if (act === 'browse-close') {
+    browseOpen = false;
+    paintBrowse();
+  }
+  if (act === 'browse-back') {
+    browseService = '';
+    browseItems = [];
+    browsePick = -1;
+    browseNote = '';
+    paintBrowse();
+  }
+  if (act === 'browse-service') {
+    browseService = el.dataset.service === 'twitch' ? 'twitch' : 'youtube';
+    browseItems = [];
+    browsePick = -1;
+    browseNote = '';
+    paintBrowse();
+  }
+  if (act === 'browse-pick') {
+    browsePick = Number(el.dataset.i);
+    paintBrowse();
+  }
+  if (act === 'browse-confirm') {
+    const item = browseItems[browsePick];
+    if (!item || !state?.youHost) return;
+    browseOpen = false;
+    paintBrowse();
+    socket.emit('cinema:video', { url: item.url });
+  }
   if (act === 'hud-toggle') toggleHud(el);
   if (act === 'hud-pause') hudTogglePause();
   if (act === 'hud-seek') hudSeek(Number(el.dataset.by) || 0);
@@ -991,6 +1036,10 @@ document.addEventListener('submit', (event) => {
     socket.emit('cinema:video', { url: input.value });
     return;
   }
+  if (act === 'browse-search') {
+    searchBrowse();
+    return;
+  }
   if (act === 'save-profile') {
     const name = form.querySelector('.profile-name').value.replace(/\s+/g, ' ').trim().slice(0, 20);
     profile = { name, avatar: profileDraft?.avatar || '' };
@@ -1007,6 +1056,7 @@ document.addEventListener('submit', (event) => {
 document.addEventListener('input', (event) => {
   const target = event.target;
   if (target?.classList?.contains('cinema-url')) cinemaUrlDraft = target.value;
+  if (target?.classList?.contains('browse-query')) browseQuery = target.value;
   if (target?.classList?.contains('cinema-volume')) {
     const value = Number(target.value);
     localStorage.setItem(CINEMA_VOL_KEY, String(value));
@@ -1377,6 +1427,8 @@ const CINEMA_QUAL_KEY = 'leisure-cinema-quality';
 const CINEMA_CC_KEY = 'leisure-cinema-cc';
 
 let cinemaTab = 'chat';
+let hudIdleTimer = 0;
+let hudHeld = false;
 let cinemaUnread = 0;
 let cinemaUrlDraft = '';
 let cinemaMounted = '';
@@ -1460,11 +1512,80 @@ function hostRoomCard() {
         <strong>${escapeHtml(state.code)}</strong>
       </div>
       <button class="btn" type="button" data-act="copy-link">Скопировать ссылку</button>
+      <button class="btn ghost wide" type="button" data-act="browse-open">Браузер видео</button>
       ${state.video?.id ? `<form data-act="cinema-url">
         <input class="cinema-url" value="${escapeHtml(cinemaUrlDraft)}" placeholder="Другая ссылка" autocomplete="off">
         <button class="btn" type="submit">Сменить</button>
       </form>` : ''}
     </div>`;
+}
+
+function paintBrowse() {
+  const root = document.querySelector('.browse');
+  if (!root) return;
+  root.hidden = !browseOpen;
+  if (!browseOpen) {
+    root.innerHTML = '';
+    return;
+  }
+  if (!browseService) {
+    root.innerHTML = `
+      <div class="browse-head"><b>Где искать видео?</b><button type="button" class="btn ghost" data-act="browse-close">Закрыть</button></div>
+      <div class="browse-services">
+        <button type="button" data-act="browse-service" data-service="youtube">YouTube</button>
+        <button type="button" data-act="browse-service" data-service="twitch">Twitch</button>
+      </div>`;
+    return;
+  }
+  const cards = browseItems.map((item, index) => {
+    const thumb = /^https:\/\//.test(item.thumb || '') ? escapeHtml(item.thumb) : '';
+    return `
+      <button type="button" class="browse-card${index === browsePick ? ' on' : ''}" data-act="browse-pick" data-i="${index}">
+        ${thumb ? `<img alt="" src="${thumb}">` : '<i class="browse-ph"></i>'}
+        <b>${escapeHtml(item.title || '')}</b>
+        <span>${escapeHtml(item.live ? 'В эфире' : (item.author || ''))}</span>
+      </button>`;
+  }).join('');
+  const grid = browseLoading
+    ? '<p class="note">Ищем…</p>'
+    : (cards || (browseNote ? '' : '<p class="note">Напиши запрос и нажми «Найти».</p>'));
+  root.innerHTML = `
+    <div class="browse-head">
+      <button type="button" class="btn ghost" data-act="browse-back">Назад</button>
+      <b>${browseService === 'twitch' ? 'Twitch' : 'YouTube'}</b>
+      <button type="button" class="btn ghost" data-act="browse-close">Закрыть</button>
+    </div>
+    <form class="browse-search" data-act="browse-search">
+      <input class="browse-query" value="${escapeHtml(browseQuery)}" placeholder="Поиск" autocomplete="off">
+      <button class="btn" type="submit">Найти</button>
+    </form>
+    ${browseNote ? `<p class="note">${escapeHtml(browseNote)}</p>` : ''}
+    <div class="browse-grid">${grid}</div>
+    <button class="btn" type="button" data-act="browse-confirm" ${browsePick < 0 ? 'disabled' : ''}>Подтвердить</button>`;
+}
+
+async function searchBrowse() {
+  const query = browseQuery.trim();
+  if (!browseService || !query) {
+    browseNote = 'Напиши, что искать.';
+    paintBrowse();
+    return;
+  }
+  browseLoading = true;
+  browseNote = '';
+  browsePick = -1;
+  paintBrowse();
+  try {
+    const response = await fetch(`/browse?service=${encodeURIComponent(browseService)}&q=${encodeURIComponent(query)}&t=${encodeURIComponent(token)}`);
+    const data = await response.json();
+    browseItems = Array.isArray(data.items) ? data.items : [];
+    browseNote = data.error || (browseItems.length ? '' : 'Ничего не нашлось.');
+  } catch {
+    browseItems = [];
+    browseNote = 'Поиск сейчас не отвечает.';
+  }
+  browseLoading = false;
+  if (browseOpen) paintBrowse();
 }
 
 function captionsOn() {
@@ -1758,6 +1879,7 @@ function cinemaHtml() {
     <section class="cinema">
       <div class="stage">
         <div class="stage-frame">${stage}${hud}</div>
+        <div class="browse" hidden></div>
         <div class="fs-edge" aria-hidden="true"></div>
         <div class="fs-float" aria-live="polite"></div>
         <div class="soft-keys" aria-label="Клавиатура"></div>
@@ -1769,7 +1891,7 @@ function cinemaHtml() {
         <div class="cinema-head">
           <div class="cinema-tabs">
             <button type="button" class="${cinemaTab === 'chat' ? 'on' : ''}" data-act="cinema-tab" data-tab="chat">Чат ${badge}</button>
-            <button type="button" class="${cinemaTab === 'people' ? 'on' : ''}" data-act="cinema-tab" data-tab="people">Зрители</button>
+            <button type="button" class="${cinemaTab === 'people' ? 'on' : ''}" data-act="cinema-tab" data-tab="people">Кинотеатр</button>
           </div>
           <div class="cinema-head-actions">
             <button type="button" class="profile-chip" data-act="profile">${avatarHtml(profile, 'Я')}</button>
@@ -1827,10 +1949,12 @@ function renderCinema() {
     paintPoster();
     paintSoftKeys();
     syncChatInputMode();
+    paintBrowse();
     return;
   }
   patchCinemaSide();
   paintPoster();
+  paintBrowse();
 }
 
 function handleCinemaState(next) {
@@ -2222,3 +2346,33 @@ function onCinemaFullChange() {
 }
 document.addEventListener('fullscreenchange', onCinemaFullChange);
 document.addEventListener('webkitfullscreenchange', onCinemaFullChange);
+
+document.addEventListener('pointerdown', (event) => {
+  if (event.target.closest?.('.stage-hud')) hudHeld = true;
+});
+document.addEventListener('pointerup', () => { hudHeld = false; });
+document.addEventListener('pointercancel', () => { hudHeld = false; });
+document.addEventListener('pointermove', (event) => {
+  if (coarsePointer()) return;
+  const frame = event.target.closest?.('.stage-frame');
+  if (!frame) return;
+  frame.classList.remove('hud-idle');
+  clearTimeout(hudIdleTimer);
+  const settle = () => {
+    if (!frame.isConnected) return;
+    if (hudHeld || hudScrub) {
+      hudIdleTimer = setTimeout(settle, 3000);
+      return;
+    }
+    frame.classList.add('hud-idle');
+  };
+  hudIdleTimer = setTimeout(settle, 3000);
+});
+document.addEventListener('pointerout', (event) => {
+  const frame = event.target.closest?.('.stage-frame');
+  if (!frame) return;
+  const next = event.relatedTarget;
+  if (next && frame.contains(next)) return;
+  frame.classList.remove('hud-idle');
+  clearTimeout(hudIdleTimer);
+});

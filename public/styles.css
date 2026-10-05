@@ -1392,6 +1392,60 @@ body.in-cinema #view {
 
 .fs-edge, .fs-toggle, .fs-float, .soft-keys { display: none; }
 
+.browse {
+  position: absolute;
+  inset: 0;
+  z-index: 9;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  background: rgba(8, 6, 5, 0.96);
+  overflow: auto;
+}
+.browse[hidden] { display: none !important; }
+.browse-head, .browse-search { display: flex; align-items: center; gap: 8px; }
+.browse-head b { flex: 1; font-size: 18px; }
+.browse-search input { flex: 1; height: 42px; border-radius: 12px; border: 1px solid var(--line); background: #14110e; padding: 0 12px; }
+.browse-services {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+}
+.browse-services button {
+  min-width: 180px;
+  min-height: 96px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: #1c1714;
+  color: var(--cream);
+  font-size: 22px;
+  font-weight: 800;
+}
+.browse-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
+  align-content: start;
+}
+.browse-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #1a1511;
+  color: var(--cream);
+  text-align: left;
+  padding: 0;
+  overflow: hidden;
+}
+.browse-card.on { outline: 2px solid var(--coral); }
+.browse-card img, .browse-ph { width: 100%; height: 104px; object-fit: cover; background: #000; display: block; }
+.browse-card b, .browse-card span { display: block; padding: 0 8px; }
+.browse-card b { margin-top: 8px; font-size: 13px; line-height: 1.3; }
+.browse-card span { margin: 4px 0 8px; color: var(--muted); font-size: 12px; }
+
 @media (hover: hover) and (pointer: fine) {
   .stage-frame:hover .stage-hud,
   .stage-hud:focus-within { opacity: 1; }
@@ -1403,6 +1457,17 @@ body.in-cinema #view {
   .stage-hud:focus-within .hud-top *,
   .stage-hud:focus-within .hud-bottom,
   .stage-hud:focus-within .hud-bottom * { pointer-events: auto; }
+  .stage-frame.hud-idle .stage-hud,
+  .stage-frame.hud-idle:hover .stage-hud,
+  .stage-frame.hud-idle .stage-hud:focus-within { opacity: 0; }
+  .stage-frame.hud-idle .hud-top,
+  .stage-frame.hud-idle .hud-top *,
+  .stage-frame.hud-idle .hud-bottom,
+  .stage-frame.hud-idle .hud-bottom *,
+  .stage-frame.hud-idle:hover .hud-top,
+  .stage-frame.hud-idle:hover .hud-top *,
+  .stage-frame.hud-idle:hover .hud-bottom,
+  .stage-frame.hud-idle:hover .hud-bottom * { pointer-events: none; }
   .cinema:fullscreen .fs-edge,
   .cinema:-webkit-full-screen .fs-edge {
     display: block;
