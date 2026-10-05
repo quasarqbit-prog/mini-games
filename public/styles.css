@@ -845,32 +845,64 @@ body.in-game #view {
   padding: 0;
   border: 0;
   border-radius: 2px;
-  background: linear-gradient(180deg, #1a3a46, #102830);
-  box-shadow: inset 0 1px 0 rgba(180, 220, 235, 0.08);
+  background: #14303a;
+  overflow: visible;
 }
 
-.sea button.alt { background: linear-gradient(180deg, #14323d, #0d222b); }
-.sea button.ship {
-  background: linear-gradient(180deg, #b7e4f6 0%, #3e86ab 46%, #1d5574 100%);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55), 0 0 8px rgba(80, 170, 210, 0.25);
+.sea button.hull { z-index: 1; }
+.sea button.hull::before {
+  content: "";
+  position: absolute;
+  background: #d5dee3;
+  z-index: 1;
 }
-.sea button.hit {
-  background: radial-gradient(circle at 50% 45%, #ffd0bf 0%, #e25a3a 42%, #8d2b1c 100%);
-  box-shadow: inset 0 0 0 1px rgba(255, 220, 200, 0.4);
+.sea button.hull.dir-h::before { top: 22%; bottom: 22%; left: -1px; right: -1px; }
+.sea button.hull.dir-v::before { left: 22%; right: 22%; top: -1px; bottom: -1px; }
+.sea button.hull.dir-h.stern::before {
+  left: 14%;
+  border-radius: 40% 0 0 40%;
+  background:
+    linear-gradient(#7f949c, #7f949c) 22% 18% / 28% 64% no-repeat,
+    #d5dee3;
 }
-.sea button.sunk {
-  background: linear-gradient(180deg, #6a3028, #3c1614);
-  box-shadow: inset 0 0 0 1px rgba(255, 160, 140, 0.35);
+.sea button.hull.dir-h.bow::before {
+  right: 8%;
+  clip-path: polygon(0 8%, 68% 8%, 100% 50%, 68% 92%, 0 92%);
 }
-.sea button.sunk::before {
-  content: "×";
-  color: #ffd3c8;
-  font-size: clamp(8px, 70%, 16px);
-  font-weight: 800;
-  line-height: 1;
+.sea button.hull.dir-v.stern::before {
+  top: 14%;
+  border-radius: 40% 40% 0 0;
+  background:
+    linear-gradient(#7f949c, #7f949c) 18% 22% / 64% 28% no-repeat,
+    #d5dee3;
 }
-.sea button.preview-ok { background: rgba(94, 196, 132, 0.55); box-shadow: inset 0 0 0 1px rgba(210, 255, 220, 0.45); }
-.sea button.preview-bad { background: rgba(214, 78, 52, 0.55); box-shadow: inset 0 0 0 1px rgba(255, 190, 170, 0.4); }
+.sea button.hull.dir-v.bow::before {
+  bottom: 8%;
+  clip-path: polygon(8% 0, 92% 0, 92% 68%, 50% 100%, 8% 68%);
+}
+.sea button.hull.solo::before {
+  border-radius: 40%;
+}
+.sea button.hull.dir-h.solo::before {
+  left: 16%;
+  right: 10%;
+  clip-path: polygon(0 28%, 22% 8%, 100% 50%, 22% 92%, 0 72%);
+}
+.sea button.hull.dir-v.solo::before {
+  top: 16%;
+  bottom: 10%;
+  clip-path: polygon(28% 0, 100% 22%, 72% 100%, 8% 22%);
+}
+.sea button.hit::after,
+.sea button.sunk::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: repeating-linear-gradient(-45deg, #e06a4a 0 2px, #6e2c22 2px 4px);
+}
+.sea button.preview-ok { background: rgba(94, 196, 132, 0.55); }
+.sea button.preview-bad { background: rgba(214, 78, 52, 0.55); }
 .sea button.miss::after {
   content: "";
   position: absolute;
@@ -914,29 +946,56 @@ body.in-game #view {
 
 .ship-piece,
 .drag-ghost {
-  display: grid;
-  grid-auto-flow: column;
-  gap: 2px;
-  padding: 4px;
+  display: flex;
+  gap: 0;
+  padding: 3px;
   border-radius: 8px;
-  border: 1px solid rgba(150, 210, 230, 0.18);
-  background: rgba(8, 24, 32, 0.55);
+  border: 1px solid transparent;
+  background: transparent;
   touch-action: none;
   cursor: grab;
 }
 
 .ship-piece.v,
-.drag-ghost.v { grid-auto-flow: row; }
-.ship-piece.on { border-color: #ff8d78; box-shadow: 0 0 0 2px rgba(255, 107, 74, 0.25); }
+.drag-ghost.v { flex-direction: column; }
+.ship-piece.on { border-color: #ff8d78; }
 
 .ship-piece i,
 .drag-ghost i {
-  width: 12px;
-  height: 12px;
-  border-radius: 3px;
-  background: linear-gradient(180deg, #d7f3ff 0%, #4f97bb 48%, #1f5d7c 100%);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  width: 11px;
+  height: 8px;
+  background: #d5dee3;
   display: block;
+}
+.ship-piece.v i,
+.drag-ghost.v i { width: 8px; height: 11px; }
+.ship-piece i:first-child,
+.drag-ghost i:first-child { border-radius: 40% 0 0 40%; }
+.ship-piece i:last-child,
+.drag-ghost i:last-child {
+  width: 14px;
+  clip-path: polygon(0 12%, 58% 12%, 100% 50%, 58% 88%, 0 88%);
+}
+.ship-piece.v i:first-child,
+.drag-ghost.v i:first-child { border-radius: 40% 40% 0 0; }
+.ship-piece.v i:last-child,
+.drag-ghost.v i:last-child {
+  width: 8px;
+  height: 14px;
+  clip-path: polygon(12% 0, 88% 0, 88% 58%, 50% 100%, 12% 58%);
+}
+.ship-piece i:only-child,
+.drag-ghost i:only-child {
+  width: 16px;
+  height: 9px;
+  border-radius: 0;
+  clip-path: polygon(0 30%, 24% 8%, 100% 50%, 24% 92%, 0 70%);
+}
+.ship-piece.v i:only-child,
+.drag-ghost.v i:only-child {
+  width: 9px;
+  height: 16px;
+  clip-path: polygon(30% 0, 92% 24%, 70% 100%, 8% 24%);
 }
 
 .drag-ghost {
@@ -1117,14 +1176,12 @@ body.in-game #view {
   padding: 0 1px;
   border-radius: 8px;
   border: 0;
-  background: linear-gradient(180deg, #52483e, #332c26);
+  background: #3d342b;
   color: var(--cream);
-  font-weight: 800;
+  font-weight: 700;
   text-transform: uppercase;
   overflow: hidden;
-  box-shadow: inset 0 1px 0 rgba(255, 244, 230, 0.16), 0 2px 0 #1a1511;
 }
-.key:hover { filter: brightness(1.08); }
 
 .key.wide {
   flex: 1.55 1 0;
@@ -1132,9 +1189,9 @@ body.in-game #view {
   font-size: clamp(8px, 1.5vw, 12px);
   letter-spacing: 0;
 }
-.key.correct { background: linear-gradient(180deg, #67b57e, #2f7a4c); color: white; }
-.key.present { background: linear-gradient(180deg, #e2b15a, #a87416); color: #24180f; }
-.key.absent { background: #2a241e; color: #7d7268; box-shadow: none; }
+.key.correct { background: var(--green); color: white; }
+.key.present { background: var(--yellow); color: #24180f; }
+.key.absent { background: #2a241e; color: #7d7268; }
 .keyboard.is-locked { opacity: 0.55; }
 .keyboard.is-locked .key { cursor: default; }
 

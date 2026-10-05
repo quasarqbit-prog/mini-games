@@ -912,6 +912,46 @@ function shipBlocks(len) {
   return Array.from({ length: len }, () => '<i></i>').join('');
 }
 
+function shipLook(ship, r, c) {
+  if (!ship || ship.r == null) return '';
+  const along = ship.dir === 'h' ? c - ship.c : r - ship.r;
+  if (along < 0 || along >= ship.len) return '';
+  const part = ship.len === 1 ? 'solo' : along === 0 ? 'stern' : along === ship.len - 1 ? 'bow' : 'mid';
+  return `hull dir-${ship.dir} ${part}`;
+}
+
+function sunkLooks(shots) {
+  const cells = (shots || []).filter((shot) => shot.mark === 'sunk');
+  const set = new Set(cells.map((shot) => `${shot.r},${shot.c}`));
+  const seen = new Set();
+  const looks = new Map();
+  cells.forEach((shot) => {
+    const start = `${shot.r},${shot.c}`;
+    if (seen.has(start)) return;
+    const group = [];
+    const stack = [[shot.r, shot.c]];
+    seen.add(start);
+    while (stack.length) {
+      const [r, c] = stack.pop();
+      group.push([r, c]);
+      [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(([dr, dc]) => {
+        const key = `${r + dr},${c + dc}`;
+        if (!set.has(key) || seen.has(key)) return;
+        seen.add(key);
+        stack.push([r + dr, c + dc]);
+      });
+    }
+    const vertical = group.some(([r]) => r !== group[0][0]);
+    const dir = vertical ? 'v' : 'h';
+    group.sort((a, b) => (dir === 'h' ? a[1] - b[1] : a[0] - b[0]));
+    group.forEach(([r, c], index) => {
+      const part = group.length === 1 ? 'solo' : index === 0 ? 'stern' : index === group.length - 1 ? 'bow' : 'mid';
+      looks.set(`${r},${c}`, `hull dir-${dir} ${part}`);
+    });
+  });
+  return looks;
+}
+
 function ghostMark(r, c) {
   const ship = fleetDraft?.[fleetSelect];
   if (!fleetHover || !ship || state?.youReady || state?.phase !== 'place') return '';
@@ -923,7 +963,7 @@ function ghostMark(r, c) {
   return ok ? ' preview-ok' : ' preview-bad';
 }
 
-function seaCell(kind, r, c) {
+function seaCell(kind, r, c, wrecks) {
   const placing = state.phase === 'place' && kind === 'mine';
   const own = placing ? fleetDraft : (state.yourFleet || []);
   const shipIndex = (own || []).findIndex((ship) => shipCellsOf(ship).some(([rr, cc]) => rr === r && cc === c));
@@ -932,11 +972,17 @@ function seaCell(kind, r, c) {
   const lifted = shipDrag?.moved && shipDrag.index === shipIndex;
   let cls = 'sea-cell';
   if ((r + c) % 2 === 1) cls += ' alt';
-  if (kind === 'mine' && shipIndex >= 0 && !lifted) cls += ' ship';
+  let look = '';
+  if (kind === 'mine' && shipIndex >= 0 && !lifted) look = shipLook(own[shipIndex], r, c);
   if (kind === 'foe' && adminOpen && isLocalAdmin()) {
-    const revealed = (state.foeFleet || []).some((ship) => shipCellsOf(ship).some(([rr, cc]) => rr === r && cc === c));
-    if (revealed) cls += ' admin-ship';
+    const revealed = (state.foeFleet || []).find((ship) => shipCellsOf(ship).some(([rr, cc]) => rr === r && cc === c));
+    if (revealed) {
+      look = shipLook(revealed, r, c);
+      cls += ' admin-ship';
+    }
   }
+  if (!look && shot?.mark === 'sunk') look = wrecks?.get(`${r},${c}`) || '';
+  if (look) cls += ` ${look}`;
   if (shot) cls += ` ${shot.mark}`;
   if (placing) cls += ghostMark(r, c);
   const canPlace = placing && !state.youReady;
@@ -947,12 +993,14 @@ function seaCell(kind, r, c) {
 }
 
 function seaGrid(kind) {
+  const shots = kind === 'mine' ? state.incoming : state.yourShots;
+  const wrecks = sunkLooks(shots);
   let html = `<div class="sea-wrap"><div class="sea ${kind}">`;
   html += '<i></i>';
   for (let c = 0; c < 10; c += 1) html += `<i>${SEA_LETTERS[c]}</i>`;
   for (let r = 0; r < 10; r += 1) {
     html += `<i>${r + 1}</i>`;
-    for (let c = 0; c < 10; c += 1) html += seaCell(kind, r, c);
+    for (let c = 0; c < 10; c += 1) html += seaCell(kind, r, c, wrecks);
   }
   html += '</div></div>';
   return html;
@@ -1599,11 +1647,11 @@ function handleBattleState(next) {
 function paintFleetPreview() {
   const lifted = shipDrag?.moved ? shipDrag.index : -1;
   document.querySelectorAll('.sea.mine [data-r]').forEach((button) => {
-    button.classList.remove('preview-ok', 'preview-bad', 'ship');
+    button.classList.remove('preview-ok', 'preview-bad', 'hull', 'dir-h', 'dir-v', 'bow', 'stern', 'mid', 'solo');
     const r = Number(button.dataset.r);
     const c = Number(button.dataset.c);
     const index = (fleetDraft || []).findIndex((ship) => shipCellsOf(ship).some(([rr, cc]) => rr === r && cc === c));
-    if (index >= 0 && index !== lifted) button.classList.add('ship');
+    if (index >= 0 && index !== lifted) button.classList.add(...shipLook(fleetDraft[index], r, c).split(' '));
     const mark = ghostMark(r, c);
     if (mark.includes('preview-ok')) button.classList.add('preview-ok');
     if (mark.includes('preview-bad')) button.classList.add('preview-bad');
