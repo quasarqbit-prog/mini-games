@@ -931,6 +931,7 @@ function seaCell(kind, r, c) {
   const shot = (shots || []).find((item) => item.r === r && item.c === c);
   const lifted = shipDrag?.moved && shipDrag.index === shipIndex;
   let cls = 'sea-cell';
+  if ((r + c) % 2 === 1) cls += ' alt';
   if (kind === 'mine' && shipIndex >= 0 && !lifted) cls += ' ship';
   if (kind === 'foe' && adminOpen && isLocalAdmin()) {
     const revealed = (state.foeFleet || []).some((ship) => shipCellsOf(ship).some(([rr, cc]) => rr === r && cc === c));
