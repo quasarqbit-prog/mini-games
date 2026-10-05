@@ -1314,6 +1314,20 @@ function finishSwipe() {
   if (!text) return;
   replyDraft = { name: messageName(msg), text: text.slice(0, 140) };
   paintReply();
+  beginReplyInput();
+}
+
+function beginReplyInput() {
+  const input = document.querySelector('.chat-input');
+  if (!input) return;
+  if (mobileCinemaFull()) {
+    document.querySelector('.cinema.side-open')?.classList.add('keys-open');
+    paintSoftKeys();
+    return;
+  }
+  input.focus();
+  const end = input.value.length;
+  try { input.setSelectionRange(end, end); } catch { /* the field can be read-only */ }
 }
 
 document.addEventListener('pointerup', finishSwipe);
