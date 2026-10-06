@@ -185,6 +185,32 @@ async function main() {
     });
   });
   assert(/только хост/.test(deniedSeek), `guest seek blocked: ${deniedSeek}`);
+  assert(queued.video.rate === 1, 'speed starts at 1');
+  cinemaHost.emit('cinema:rate', { rate: 1.64 });
+  const rated = await cinemaGuest.when((s) => s.video && s.video.rate === 1.6, 'rate 1.6');
+  assert(rated.video.rate === 1.6, 'speed steps by 0.1');
+  cinemaHost.emit('cinema:play');
+  await cinemaGuest.when((s) => s.video && s.video.playing, 'play for rate');
+  const beforeRate = rated.video.at;
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  cinemaHost.emit('cinema:rate', { rate: 2 });
+  const doubled = await cinemaGuest.when((s) => s.video && s.video.rate === 2 && s.video.at > beforeRate + 0.15, 'rate keeps place');
+  assert(doubled.video.at < beforeRate + 3, 'rate does not jump ahead');
+  cinemaHost.emit('cinema:rate', { rate: 0.04 });
+  const floored = await cinemaGuest.when((s) => s.video && s.video.rate === 0.1, 'rate floor');
+  assert(floored.video.rate === 0.1, 'speed floors at 0.1');
+  cinemaGuest.emit('cinema:rate', { rate: 0.4 });
+  const deniedRate = await new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(''), 800);
+    cinemaGuest.once('errorMsg', (payload) => {
+      clearTimeout(timer);
+      resolve(typeof payload === 'string' ? payload : payload.text);
+    });
+  });
+  assert(/хост/.test(deniedRate), `guest rate blocked: ${deniedRate}`);
+  await cinemaHost.when((s) => s.video && s.video.rate === 0.1, 'guest cannot change speed');
+  cinemaHost.emit('cinema:rate', { rate: 1 });
+  await cinemaGuest.when((s) => s.video && s.video.rate === 1, 'rate reset');
   const guestId = theatreWaitId(watching);
   cinemaHost.emit('cinema:host', { id: guestId });
   const passed = await cinemaGuest.when((s) => s.youHost, 'host passed');

@@ -1727,7 +1727,7 @@ body.in-cinema #view {
   gap: 8px;
 }
 .hud-top { justify-content: space-between; }
-.hud-bottom { display: flex; flex-direction: column; gap: 8px; }
+.hud-actions { flex-wrap: wrap; }
 .hud-btn {
   width: 42px;
   height: 42px;
@@ -1743,6 +1743,17 @@ body.in-cinema #view {
 .hud-pause.is-paused .icon-play { display: block; }
 .hud-volume { color: var(--cream); font-size: 13px; }
 .hud-volume input { width: 110px; }
+.hud-speed { color: var(--cream); font-size: 13px; }
+.cinema-rate {
+  height: 42px;
+  border: 0;
+  border-radius: 12px;
+  background: rgba(20, 16, 14, 0.72);
+  color: var(--cream);
+  font-weight: 800;
+  padding: 0 8px;
+}
+.cinema-rate:disabled { opacity: 1; }
 .cinema-quality { color: var(--cream); }
 .hud-line { gap: 10px; }
 .hud-now, .hud-dur { min-width: 42px; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--cream); }

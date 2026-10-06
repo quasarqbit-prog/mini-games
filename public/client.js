@@ -1504,6 +1504,9 @@ document.addEventListener('change', async (event) => {
     localStorage.setItem(CINEMA_QUAL_KEY, event.target.value);
     applyCinemaQuality();
   }
+  if (event.target?.classList?.contains('cinema-rate') && state?.youHost) {
+    socket.emit('cinema:rate', { rate: Number(event.target.value) });
+  }
   const setting = event.target.closest?.('[data-setting-num]');
   if (setting && state?.you === 'host' && state.phase === 'lobby') {
     socket.emit('settings', { ...state.settings, [setting.dataset.settingNum]: Number(setting.value) });
@@ -2062,11 +2065,29 @@ function savedQuality() {
   return localStorage.getItem(CINEMA_QUAL_KEY) || 'auto';
 }
 
+function playbackRate(raw) {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return 1;
+  const stepped = Math.round(n * 10) / 10;
+  return Math.min(2, Math.max(0.1, stepped));
+}
+
+function rateChoices(current) {
+  const selected = playbackRate(current).toFixed(1);
+  let html = '';
+  for (let step = 1; step <= 20; step += 1) {
+    const value = (step / 10).toFixed(1);
+    html += `<option value="${value}" ${value === selected ? 'selected' : ''}>${value}×</option>`;
+  }
+  return html;
+}
+
 function mediaClock(video) {
   if (!video?.id) return 0;
   if (!video.playing) return video.at || 0;
   const now = Date.now() + cinemaClockOffset;
-  const time = (video.at || 0) + Math.max(0, (now - video.updatedAt) / 1000);
+  const rate = video.live ? 1 : playbackRate(video.rate);
+  const time = (video.at || 0) + Math.max(0, (now - video.updatedAt) / 1000) * rate;
   if (video.pauseAt != null) return Math.min(time, video.pauseAt);
   return time;
 }
@@ -2396,6 +2417,10 @@ function paintHud() {
     scrub.max = String(Math.round(duration * 10));
     scrub.value = String(Math.round(Math.min(duration, Math.max(0, time)) * 10));
   }
+  const rateSelect = hud.querySelector('.cinema-rate');
+  if (rateSelect && document.activeElement !== rateSelect) {
+    rateSelect.value = playbackRate(state.video.rate).toFixed(1);
+  }
   } catch { /* player is still starting */ }
 }
 
@@ -2449,6 +2474,7 @@ function cinemaHtml() {
           </button>
           ${host ? `<button class="hud-btn" type="button" data-act="hud-seek" data-by="-5" aria-label="Назад на 5 секунд">−5</button>
           <button class="hud-btn" type="button" data-act="hud-seek" data-by="5" aria-label="Вперёд на 5 секунд">+5</button>` : ''}
+          <label class="hud-speed"><span>Скорость</span><select class="cinema-rate" aria-label="Скорость" ${host ? '' : 'disabled'}>${rateChoices(state.video?.rate)}</select></label>
         </div>
         <div class="hud-line">
           <span class="hud-now">0:00</span>
@@ -2822,6 +2848,7 @@ function playbackAdapter() {
       play: () => ytPlayer.playVideo(),
       pause: () => ytPlayer.pauseVideo(),
       rate: (n) => { try { ytPlayer.setPlaybackRate(n); } catch { /* ignore */ } },
+      appliedRate: () => { try { return ytPlayer.getPlaybackRate?.() || 0; } catch { return 0; } },
       PLAYING: YT.PlayerState.PLAYING,
       BUFFERING: YT.PlayerState.BUFFERING,
     };
@@ -2836,6 +2863,7 @@ function playbackAdapter() {
       play: () => twitchPlayer.play(),
       pause: () => twitchPlayer.pause(),
       rate: () => {},
+      appliedRate: () => 1,
       PLAYING: 1,
       BUFFERING: -99,
       jumpCatchup: true,
@@ -2850,6 +2878,7 @@ function playbackAdapter() {
       play: () => node.play().catch(() => {}),
       pause: () => node.pause(),
       rate: (n) => { node.playbackRate = n; },
+      appliedRate: () => node.playbackRate || 1,
       PLAYING: 1,
       BUFFERING: 3,
     };
@@ -2865,6 +2894,7 @@ function syncYouTube(force) {
   const playerState = player.status();
   const pauseAt = state.video.pauseAt;
   const playing = state.video.playing;
+  const rate = playbackRate(state.video.rate);
   if (state.youHost && !remoteAction && Math.abs(local - lastSample) > 2.4 && Math.abs(local - target) > 2.4) {
     lastSample = local;
     socket.emit('cinema:seek', { time: local });
@@ -2878,20 +2908,21 @@ function syncYouTube(force) {
   lastSample = local;
   if (pauseAt != null && local >= pauseAt - 0.25) {
     ytCatching = false;
-    player.rate(1);
+    player.rate(rate);
     if (playerState === player.PLAYING) withRemote(() => player.pause());
     return;
   }
   if (!playing && pauseAt == null) {
     ytCatching = false;
-    player.rate(1);
+    player.rate(rate);
     if (Math.abs(local - state.video.at) > 1.2) withRemote(() => player.seek(state.video.at));
     if (playerState === player.PLAYING) withRemote(() => player.pause());
     return;
   }
   const behind = target - local;
   if (player.jumpCatchup) {
-    if (behind >= 5) withRemote(() => player.seek(Math.max(0, target)));
+    const paced = Math.abs(rate - 1) > 0.05 && Math.abs(behind) > 1.2;
+    if (behind >= 5 || paced) withRemote(() => player.seek(Math.max(0, target)));
     else if (behind < -1.5 && !state.youHost) withRemote(() => player.seek(Math.max(0, target)));
     if (force) {
       withRemote(() => {
@@ -2903,7 +2934,12 @@ function syncYouTube(force) {
   }
   if (!ytCatching && behind >= 5) ytCatching = true;
   if (ytCatching && behind <= 0.35) ytCatching = false;
-  player.rate(ytCatching ? (behind >= 12 ? 2 : 1.5) : 1);
+  const wanted = ytCatching ? Math.min(2, Math.round((rate + (behind >= 12 ? 1 : 0.5)) * 10) / 10) : rate;
+  player.rate(wanted);
+  const actual = Number(player.appliedRate?.() || 0);
+  if (playing && pauseAt == null && actual && Math.abs(actual - wanted) > 0.05 && Math.abs(behind) > 1.2) {
+    withRemote(() => player.seek(Math.max(0, target)));
+  }
   if (!state.youHost && behind < -1.5) {
     withRemote(() => player.seek(Math.max(0, target)));
     return;

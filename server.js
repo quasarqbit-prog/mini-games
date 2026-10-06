@@ -667,7 +667,15 @@ function blankVideo() {
     at: 0,
     updatedAt: 0,
     pauseAt: null,
+    rate: 1,
   };
+}
+
+function playbackRate(raw) {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return 1;
+  const stepped = Math.round(n * 10) / 10;
+  return Math.min(2, Math.max(0.1, stepped));
 }
 
 function emptyCinema(code) {
@@ -696,7 +704,8 @@ function cinemaName(member) {
 function mediaNow(video, now = Date.now()) {
   if (!video?.id) return 0;
   if (!video.playing) return video.at;
-  const elapsed = Math.max(0, (now - video.updatedAt) / 1000);
+  const rate = video.live ? 1 : playbackRate(video.rate);
+  const elapsed = Math.max(0, (now - video.updatedAt) / 1000) * rate;
   const time = video.at + elapsed;
   if (video.pauseAt != null) return Math.min(time, video.pauseAt);
   return time;
@@ -748,6 +757,7 @@ function cinemaView(room, token) {
       at: room.video.at,
       updatedAt: room.video.updatedAt,
       pauseAt: room.video.pauseAt,
+      rate: playbackRate(room.video.rate),
     },
     members: room.members.map((member) => ({
       id: member.id,
@@ -1305,6 +1315,7 @@ io.on('connection', (socket) => {
     if (!parsed) return fail(socket, 'Нужна ссылка на YouTube, Twitch, Google Drive или Dropbox');
     if (room.screen) endScreen(room, 'Демонстрация экрана закончилась.');
     const now = Date.now();
+    const rate = playbackRate(room.video.rate);
     room.video = {
       ...blankVideo(),
       kind: parsed.kind,
@@ -1315,6 +1326,7 @@ io.on('connection', (socket) => {
       upstream: parsed.upstream,
       playing: Boolean(parsed.live),
       updatedAt: now,
+      rate,
     };
     pushChat(room, 'system', `${cinemaName(member)} включил ${watchLabel(parsed)}.`);
     broadcast(room);
@@ -1355,6 +1367,19 @@ io.on('connection', (socket) => {
     room.video.at = at;
     room.video.pauseAt = null;
     room.video.updatedAt = now;
+    broadcast(room);
+  });
+
+  socket.on('cinema:rate', ({ rate } = {}) => {
+    const found = requireCinema(socket);
+    if (!found) return fail(socket, 'Комната не найдена');
+    const { room, member } = found;
+    if (!member.host) return fail(socket, 'Скорость ставит хост');
+    if (!room.video.id || room.screen || room.video.live) return;
+    const now = Date.now();
+    room.video.at = mediaNow(room.video, now);
+    room.video.updatedAt = now;
+    room.video.rate = playbackRate(rate);
     broadcast(room);
   });
 
