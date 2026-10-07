@@ -1691,6 +1691,115 @@ app.get('/browse', async (req, res) => {
   }
 });
 
+const storyboardCache = new Map();
+
+function extractJsonObject(text, start) {
+  let depth = 0;
+  let quote = false;
+  let esc = false;
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+    if (quote) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') quote = false;
+      continue;
+    }
+    if (ch === '"') {
+      quote = true;
+      continue;
+    }
+    if (ch === '{') depth += 1;
+    else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return '';
+}
+
+function parseStoryboardSpec(spec) {
+  const parts = String(spec || '').split('|');
+  const base = parts.shift();
+  if (!base || !parts.length) return null;
+  const levels = parts.map((level, index) => {
+    const bit = level.split('#');
+    return {
+      index,
+      width: Number(bit[0]),
+      height: Number(bit[1]),
+      count: Number(bit[2]),
+      cols: Number(bit[3]),
+      rows: Number(bit[4]),
+      interval: Number(bit[5]) / 1000,
+      sigh: bit[7] || '',
+    };
+  }).filter((level) => level.width > 0 && level.height > 0 && level.count > 0 && level.cols > 0 && level.rows > 0 && level.interval > 0 && level.sigh);
+  const chosen = levels.find((level) => level.width === 160) || levels.find((level) => level.width >= 160) || levels.at(-1);
+  if (!chosen) return null;
+  const url = `${base.replace('$L', String(chosen.index)).replace('$N', 'M$M')}&sigh=${encodeURIComponent(chosen.sigh)}`;
+  return {
+    url,
+    width: chosen.width,
+    height: chosen.height,
+    count: chosen.count,
+    cols: chosen.cols,
+    rows: chosen.rows,
+    interval: chosen.interval,
+  };
+}
+
+async function youtubeStoryboard(id) {
+  const cached = storyboardCache.get(id);
+  if (cached && Date.now() - cached.at < 30 * 60 * 1000) return cached.spec;
+  const response = await fetch(`https://www.youtube.com/watch?v=${id}`, {
+    headers: {
+      'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+      'accept-language': 'en',
+    },
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!response.ok) return null;
+  const html = await response.text();
+  const marker = html.indexOf('ytInitialPlayerResponse');
+  const jsonStart = marker < 0 ? -1 : html.indexOf('{', marker);
+  if (jsonStart < 0) return null;
+  let data = null;
+  try {
+    data = JSON.parse(extractJsonObject(html, jsonStart));
+  } catch {
+    return null;
+  }
+  const spec = parseStoryboardSpec(data?.storyboards?.playerStoryboardSpecRenderer?.spec);
+  if (!spec) return null;
+  storyboardCache.set(id, { at: Date.now(), spec });
+  return spec;
+}
+
+app.get('/storyboard', async (req, res) => {
+  const id = String(req.query.id || '');
+  const token = String(req.query.t || '');
+  if (!/^[\w-]{11}$/.test(id)) {
+    res.status(400).json({});
+    return;
+  }
+  const room = findByToken(token);
+  if (!room || room.game !== 'cinema' || room.video?.kind !== 'youtube' || room.video.id !== id) {
+    res.status(403).json({});
+    return;
+  }
+  try {
+    const spec = await youtubeStoryboard(id);
+    if (!spec) {
+      res.status(404).json({});
+      return;
+    }
+    res.json(spec);
+  } catch {
+    res.status(502).json({});
+  }
+});
+
 app.get('/media/:code', async (req, res) => {
   const controller = new AbortController();
   req.on('close', () => controller.abort());

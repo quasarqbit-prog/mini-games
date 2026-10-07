@@ -211,6 +211,9 @@ async function main() {
   await cinemaHost.when((s) => s.video && s.video.rate === 0.1, 'guest cannot change speed');
   cinemaHost.emit('cinema:rate', { rate: 1 });
   await cinemaGuest.when((s) => s.video && s.video.rate === 1, 'rate reset');
+  cinemaHost.emit('cinema:seek', { time: 3.5 });
+  const rewound = await cinemaGuest.when((s) => s.video && s.video.at >= 3.5 && s.video.at < 4, 'seek backward');
+  assert(rewound.video.playing, 'rewind keeps playback');
   const guestId = theatreWaitId(watching);
   cinemaHost.emit('cinema:host', { id: guestId });
   const passed = await cinemaGuest.when((s) => s.youHost, 'host passed');

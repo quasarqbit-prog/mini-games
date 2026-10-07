@@ -1496,9 +1496,7 @@ document.addEventListener('input', (event) => {
 document.addEventListener('change', async (event) => {
   if (event.target?.classList?.contains('hud-scrub')) {
     hudScrub = false;
-    if (state?.youHost && state.video?.id && !state.video.live && !state.screen) {
-      socket.emit('cinema:seek', { time: Number(event.target.value) / 10 });
-    }
+    requestSeek(Number(event.target.value) / 10);
   }
   if (event.target?.classList?.contains('cinema-quality')) {
     localStorage.setItem(CINEMA_QUAL_KEY, event.target.value);
@@ -2021,6 +2019,14 @@ const CINEMA_CC_KEY = 'leisure-cinema-cc';
 let cinemaTab = 'chat';
 let hudIdleTimer = 0;
 let hudHeld = false;
+let seekWant = null;
+let seekUntil = 0;
+let syncedStamp = '';
+let storyboard = null;
+let storyboardFor = '';
+let storyboardLoading = false;
+let previewVideo = null;
+let previewTimer = 0;
 let cinemaUnread = 0;
 let cinemaUrlDraft = '';
 let cinemaMounted = '';
@@ -2363,10 +2369,128 @@ function hudTogglePause() {
   else socket.emit('cinema:play');
 }
 
-function hudSeek(delta) {
+function requestSeek(time) {
   if (!state?.youHost || !state.video?.id || state.video.live || state.video.clip || state.screen) return;
-  const time = playbackAdapter()?.time?.() || mediaClock(state.video);
-  socket.emit('cinema:seek', { time: Math.max(0, time + delta) });
+  const at = Math.max(0, Number(time) || 0);
+  seekWant = at;
+  seekUntil = Date.now() + 2500;
+  const player = playbackAdapter();
+  if (player) {
+    withRemote(() => {
+      player.seek(at);
+      player.rate(playbackRate(state.video.rate));
+      if (state.video.playing && state.video.pauseAt == null) player.play();
+    });
+  }
+  socket.emit('cinema:seek', { time: at });
+}
+
+function hudSeek(delta) {
+  const base = seekWant != null ? seekWant : mediaClock(state.video);
+  requestSeek(base + delta);
+}
+
+function hideScrubPreview() {
+  const preview = document.querySelector('.scrub-preview');
+  if (preview) preview.hidden = true;
+}
+
+function scrubRatio(scrub, clientX) {
+  const rect = scrub.getBoundingClientRect();
+  if (!rect.width) return 0;
+  return Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+}
+
+async function ensureStoryboard(id) {
+  if (!id || storyboardLoading) return;
+  if (storyboardFor === id && storyboard) return;
+  storyboardFor = id;
+  storyboard = null;
+  storyboardLoading = true;
+  try {
+    const response = await fetch(`/storyboard?id=${encodeURIComponent(id)}&t=${encodeURIComponent(token)}`);
+    if (!response.ok || storyboardFor !== id) return;
+    const data = await response.json();
+    if (data?.url && storyboardFor === id) storyboard = data;
+  } catch { /* preview is optional */ }
+  finally { storyboardLoading = false; }
+}
+
+function paintStoryboardFrame(shot, time) {
+  if (!storyboard) {
+    shot.style.backgroundImage = '';
+    return;
+  }
+  const frame = Math.min(storyboard.count - 1, Math.max(0, Math.floor(time / storyboard.interval)));
+  const perSheet = storyboard.cols * storyboard.rows;
+  const sheet = Math.floor(frame / perSheet);
+  const index = frame % perSheet;
+  const col = index % storyboard.cols;
+  const row = Math.floor(index / storyboard.cols);
+  shot.style.backgroundImage = `url("${storyboard.url.replace('$M', String(sheet))}")`;
+  shot.style.backgroundSize = `${storyboard.cols * storyboard.width}px ${storyboard.rows * storyboard.height}px`;
+  shot.style.backgroundPosition = `${-col * storyboard.width}px ${-row * storyboard.height}px`;
+}
+
+function drawFilePreview(time) {
+  const main = document.querySelector('.cloud-video');
+  const shot = document.querySelector('.scrub-shot');
+  if (!main?.src || !shot) return;
+  if (!previewVideo) {
+    previewVideo = document.createElement('video');
+    previewVideo.muted = true;
+    previewVideo.playsInline = true;
+    previewVideo.preload = 'auto';
+  }
+  if (previewVideo.src !== main.src) previewVideo.src = main.src;
+  const paint = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 160;
+    canvas.height = 90;
+    canvas.getContext('2d')?.drawImage(previewVideo, 0, 0, 160, 90);
+    try {
+      shot.style.backgroundImage = `url("${canvas.toDataURL('image/jpeg', 0.72)}")`;
+      shot.style.backgroundSize = '160px 90px';
+      shot.style.backgroundPosition = '0 0';
+    } catch { /* frame is not ready */ }
+  };
+  if (previewVideo.readyState >= 2 && Math.abs((previewVideo.currentTime || 0) - time) < 0.35) {
+    paint();
+    return;
+  }
+  const onSeeked = () => {
+    previewVideo.removeEventListener('seeked', onSeeked);
+    paint();
+  };
+  previewVideo.addEventListener('seeked', onSeeked);
+  try { previewVideo.currentTime = Math.max(0, time); } catch { /* metadata is still loading */ }
+}
+
+function showScrubPreview(scrub, clientX) {
+  const duration = mediaDuration();
+  const preview = document.querySelector('.scrub-preview');
+  if (!preview || !duration) return;
+  const time = duration * scrubRatio(scrub, clientX);
+  preview.hidden = false;
+  const label = preview.querySelector('.scrub-time');
+  if (label) label.textContent = formatClock(time);
+  const line = scrub.closest('.hud-line')?.getBoundingClientRect();
+  const width = 160;
+  if (line) {
+    const left = Math.max(0, Math.min(clientX - line.left - width / 2, line.width - width));
+    preview.style.left = `${left}px`;
+  }
+  const shot = preview.querySelector('.scrub-shot');
+  if (!shot) return;
+  if (state?.video?.kind === 'file') {
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(() => drawFilePreview(time), 120);
+    return;
+  }
+  if (state?.video?.kind === 'youtube') {
+    ensureStoryboard(state.video.id);
+    paintStoryboardFrame(shot, time);
+  }
 }
 
 function toggleCinemaFull() {
@@ -2478,7 +2602,11 @@ function cinemaHtml() {
         </div>
         <div class="hud-line">
           <span class="hud-now">0:00</span>
-          <input class="hud-scrub" type="range" min="0" max="1000" value="0" aria-label="Таймлайн" ${host ? '' : 'disabled'}>
+          <div class="scrub-preview" hidden>
+            <i class="scrub-shot"></i>
+            <span class="scrub-time">0:00</span>
+          </div>
+          <input class="hud-scrub" type="range" min="0" max="1000" value="0" aria-label="Таймлайн">
           <span class="hud-dur">–:––</span>
           <button class="hud-btn hud-fs" type="button" data-act="stage-full" aria-label="На весь экран">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 9V4h5v2H6v3H4zm10-5h5v5h-2V6h-3V4zM4 15h2v3h3v2H4v-5zm14 3h-3v2h5v-5h-2v3z"/></svg>
@@ -2587,6 +2715,12 @@ function handleCinemaState(next) {
       if (cinemaTab !== 'chat') cinemaUnread += fresh.length;
     }
   }
+  if (seekWant != null && Math.abs((next.video?.at || 0) - seekWant) < 0.45) seekWant = null;
+  if (next.video?.kind === 'youtube' && next.video.id) ensureStoryboard(next.video.id);
+  else if (next.video?.id !== storyboardFor) {
+    storyboard = null;
+    storyboardFor = '';
+  }
   state = next;
   renderCinema();
   noteFloaters(prev, next);
@@ -2615,6 +2749,9 @@ function mountCinemaStage() {
   ytCatching = false;
   ytSawPlayback = false;
   lastSample = 0;
+  syncedStamp = '';
+  seekWant = null;
+  hideScrubPreview();
   destroyYouTube();
   destroyTwitch();
   const video = state.video;
@@ -2793,7 +2930,7 @@ function onYouTubeError(event) {
 function withRemote(fn) {
   remoteAction += 1;
   try { fn(); } catch { /* player may be mid-load */ }
-  setTimeout(() => { remoteAction = Math.max(0, remoteAction - 1); }, 800);
+  setTimeout(() => { remoteAction = Math.max(0, remoteAction - 1); }, 1600);
 }
 
 function applyCinemaVolume() {
@@ -2895,9 +3032,32 @@ function syncYouTube(force) {
   const pauseAt = state.video.pauseAt;
   const playing = state.video.playing;
   const rate = playbackRate(state.video.rate);
-  if (state.youHost && !remoteAction && Math.abs(local - lastSample) > 2.4 && Math.abs(local - target) > 2.4) {
-    lastSample = local;
-    socket.emit('cinema:seek', { time: local });
+  const stamp = `${state.video.updatedAt || 0}:${state.video.at || 0}:${state.video.playing ? 1 : 0}:${state.video.pauseAt ?? ''}`;
+  if (stamp !== syncedStamp && (force || Math.abs(target - local) > 0.8)) {
+    syncedStamp = stamp;
+    lastSample = target;
+    ytCatching = false;
+    seekUntil = Date.now() + 2500;
+    withRemote(() => {
+      player.seek(Math.max(0, target));
+      player.rate(rate);
+      if (playing && pauseAt == null) player.play();
+      else if (!playing && pauseAt == null) player.pause();
+    });
+    return;
+  }
+  syncedStamp = stamp;
+  const goal = seekWant != null ? seekWant : target;
+  if (Math.abs(goal - local) <= 0.8) seekUntil = 0;
+  else if (Date.now() < seekUntil) {
+    lastSample = goal;
+    ytCatching = false;
+    withRemote(() => {
+      player.seek(Math.max(0, goal));
+      player.rate(rate);
+      if (playing && pauseAt == null) player.play();
+      else if (!playing && pauseAt == null) player.pause();
+    });
     return;
   }
   if (!state.youHost && !remoteAction && Math.abs(local - lastSample) > 2.4 && Math.abs(local - target) > 1.5 && playerState !== player.BUFFERING) {
@@ -2976,10 +3136,20 @@ document.addEventListener('webkitfullscreenchange', onCinemaFullChange);
 
 document.addEventListener('pointerdown', (event) => {
   if (event.target.closest?.('.stage-hud')) hudHeld = true;
+  if (event.target?.classList?.contains('hud-scrub') && !state?.youHost) event.preventDefault();
 });
-document.addEventListener('pointerup', () => { hudHeld = false; });
+document.addEventListener('pointerup', (event) => {
+  hudHeld = false;
+  const scrub = event.target?.classList?.contains('hud-scrub') ? event.target : null;
+  if (scrub && hudScrub) {
+    hudScrub = false;
+    requestSeek(Number(scrub.value) / 10);
+  }
+});
 document.addEventListener('pointercancel', () => { hudHeld = false; });
 document.addEventListener('pointermove', (event) => {
+  const scrub = event.target?.classList?.contains('hud-scrub') ? event.target : null;
+  if (scrub) showScrubPreview(scrub, event.clientX);
   if (coarsePointer()) return;
   const frame = event.target.closest?.('.stage-frame');
   if (!frame) return;
@@ -2996,6 +3166,10 @@ document.addEventListener('pointermove', (event) => {
   hudIdleTimer = setTimeout(settle, 3000);
 });
 document.addEventListener('pointerout', (event) => {
+  if (event.target?.classList?.contains('hud-scrub')) {
+    const next = event.relatedTarget;
+    if (!next?.classList?.contains('hud-scrub')) hideScrubPreview();
+  }
   const frame = event.target.closest?.('.stage-frame');
   if (!frame) return;
   const next = event.relatedTarget;
