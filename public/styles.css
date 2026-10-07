@@ -1721,12 +1721,13 @@ body.in-cinema #view {
   transition: opacity .18s ease;
 }
 .stage-hud * { pointer-events: none; }
-.hud-top, .hud-actions, .hud-line, .hud-audio, .hud-volume {
+.hud-top, .hud-actions, .hud-line, .hud-tools, .hud-audio, .hud-volume {
   display: flex;
   align-items: center;
   gap: 8px;
 }
-.hud-top { justify-content: space-between; }
+.hud-top { flex-wrap: wrap; }
+.hud-audio { margin-left: auto; flex-wrap: nowrap; }
 .hud-actions { flex-wrap: wrap; }
 .hud-btn {
   width: 42px;
@@ -1741,19 +1742,17 @@ body.in-cinema #view {
 .hud-pause .icon-play { display: none; }
 .hud-pause.is-paused .icon-pause { display: none; }
 .hud-pause.is-paused .icon-play { display: block; }
-.hud-volume { color: var(--cream); font-size: 13px; }
-.hud-volume input { width: 110px; }
-.hud-speed { color: var(--cream); font-size: 13px; }
-.cinema-rate {
-  height: 42px;
-  border: 0;
-  border-radius: 12px;
-  background: rgba(20, 16, 14, 0.72);
+.hud-volume, .hud-speed {
   color: var(--cream);
-  font-weight: 800;
-  padding: 0 8px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
 }
-.cinema-rate:disabled { opacity: 1; }
+.hud-volume input, .hud-speed input { width: 92px; }
+.hud-speed input:disabled { opacity: 1; }
+.hud-rate { min-width: 38px; font-variant-numeric: tabular-nums; }
 .cinema-quality { color: var(--cream); }
 .hud-line { gap: 10px; position: relative; }
 .scrub-preview {
@@ -1773,7 +1772,7 @@ body.in-cinema #view {
   display: block;
   width: 160px;
   height: 90px;
-  background: #000 center no-repeat;
+  background: #1a1511;
 }
 .scrub-time {
   display: block;

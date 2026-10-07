@@ -1480,11 +1480,21 @@ document.addEventListener('input', (event) => {
   const target = event.target;
   if (target?.classList?.contains('cinema-url')) cinemaUrlDraft = target.value;
   if (target?.classList?.contains('browse-query')) browseQuery = target.value;
-  if (target?.classList?.contains('cinema-volume')) {
+  if (event.target?.classList?.contains('cinema-volume')) {
     const value = Number(target.value);
     localStorage.setItem(CINEMA_VOL_KEY, String(value));
     localStorage.setItem(CINEMA_MUTE_KEY, value === 0 ? '1' : '0');
     applyCinemaVolume();
+  }
+  if (target?.classList?.contains('cinema-rate') && state?.youHost) {
+    const rate = playbackRate(target.value);
+    const label = document.querySelector('.hud-rate');
+    if (label) label.textContent = `${rate.toFixed(1)}×`;
+    playbackAdapter()?.rate?.(rate);
+    clearTimeout(rateTimer);
+    rateTimer = setTimeout(() => {
+      if (state?.youHost) socket.emit('cinema:rate', { rate });
+    }, 160);
   }
   if (target?.classList?.contains('hud-scrub')) {
     hudScrub = true;
@@ -1503,7 +1513,8 @@ document.addEventListener('change', async (event) => {
     applyCinemaQuality();
   }
   if (event.target?.classList?.contains('cinema-rate') && state?.youHost) {
-    socket.emit('cinema:rate', { rate: Number(event.target.value) });
+    clearTimeout(rateTimer);
+    socket.emit('cinema:rate', { rate: playbackRate(event.target.value) });
   }
   const setting = event.target.closest?.('[data-setting-num]');
   if (setting && state?.you === 'host' && state.phase === 'lobby') {
@@ -2025,6 +2036,10 @@ let syncedStamp = '';
 let storyboard = null;
 let storyboardFor = '';
 let storyboardLoading = false;
+let sheetImages = new Map();
+let previewJob = 0;
+let previewTime = null;
+let rateTimer = 0;
 let previewVideo = null;
 let previewTimer = 0;
 let cinemaUnread = 0;
@@ -2076,16 +2091,6 @@ function playbackRate(raw) {
   if (!Number.isFinite(n)) return 1;
   const stepped = Math.round(n * 10) / 10;
   return Math.min(2, Math.max(0.1, stepped));
-}
-
-function rateChoices(current) {
-  const selected = playbackRate(current).toFixed(1);
-  let html = '';
-  for (let step = 1; step <= 20; step += 1) {
-    const value = (step / 10).toFixed(1);
-    html += `<option value="${value}" ${value === selected ? 'selected' : ''}>${value}×</option>`;
-  }
-  return html;
 }
 
 function mediaClock(video) {
@@ -2393,6 +2398,8 @@ function hudSeek(delta) {
 function hideScrubPreview() {
   const preview = document.querySelector('.scrub-preview');
   if (preview) preview.hidden = true;
+  previewTime = null;
+  previewJob += 1;
 }
 
 function scrubRatio(scrub, clientX) {
@@ -2411,31 +2418,52 @@ async function ensureStoryboard(id) {
     const response = await fetch(`/storyboard?id=${encodeURIComponent(id)}&t=${encodeURIComponent(token)}`);
     if (!response.ok || storyboardFor !== id) return;
     const data = await response.json();
-    if (data?.url && storyboardFor === id) storyboard = data;
+    if (data?.cols && storyboardFor === id) {
+      storyboard = data;
+      if (previewTime != null && !document.querySelector('.scrub-preview')?.hidden) paintStoryboardFrame(previewTime);
+    }
   } catch { /* preview is optional */ }
   finally { storyboardLoading = false; }
 }
 
-function paintStoryboardFrame(shot, time) {
-  if (!storyboard) {
-    shot.style.backgroundImage = '';
-    return;
+function storyboardSheet(id, sheet) {
+  const key = `${id}:${sheet}`;
+  let img = sheetImages.get(key);
+  if (!img) {
+    img = new Image();
+    img.src = `/storyboard-sheet?id=${encodeURIComponent(id)}&sheet=${sheet}&t=${encodeURIComponent(token)}`;
+    sheetImages.set(key, img);
   }
+  return img;
+}
+
+function paintStoryboardFrame(time) {
+  const canvas = document.querySelector('.scrub-shot');
+  if (!canvas || !storyboard || state?.video?.kind !== 'youtube') return;
+  const job = ++previewJob;
   const frame = Math.min(storyboard.count - 1, Math.max(0, Math.floor(time / storyboard.interval)));
   const perSheet = storyboard.cols * storyboard.rows;
   const sheet = Math.floor(frame / perSheet);
   const index = frame % perSheet;
   const col = index % storyboard.cols;
   const row = Math.floor(index / storyboard.cols);
-  shot.style.backgroundImage = `url("${storyboard.url.replace('$M', String(sheet))}")`;
-  shot.style.backgroundSize = `${storyboard.cols * storyboard.width}px ${storyboard.rows * storyboard.height}px`;
-  shot.style.backgroundPosition = `${-col * storyboard.width}px ${-row * storyboard.height}px`;
+  const img = storyboardSheet(state.video.id, sheet);
+  const draw = () => {
+    if (job !== previewJob || !img.naturalWidth) return;
+    const ctx = canvas.getContext('2d');
+    const cellW = img.naturalWidth / storyboard.cols;
+    const cellH = img.naturalHeight / storyboard.rows;
+    ctx.drawImage(img, col * cellW, row * cellH, cellW, cellH, 0, 0, canvas.width, canvas.height);
+  };
+  if (img.complete && img.naturalWidth) draw();
+  else img.addEventListener('load', draw, { once: true });
 }
 
 function drawFilePreview(time) {
   const main = document.querySelector('.cloud-video');
-  const shot = document.querySelector('.scrub-shot');
-  if (!main?.src || !shot) return;
+  const canvas = document.querySelector('.scrub-shot');
+  if (!main?.src || !canvas) return;
+  const job = ++previewJob;
   if (!previewVideo) {
     previewVideo = document.createElement('video');
     previewVideo.muted = true;
@@ -2444,15 +2472,9 @@ function drawFilePreview(time) {
   }
   if (previewVideo.src !== main.src) previewVideo.src = main.src;
   const paint = () => {
-    const canvas = document.createElement('canvas');
-    canvas.width = 160;
-    canvas.height = 90;
-    canvas.getContext('2d')?.drawImage(previewVideo, 0, 0, 160, 90);
-    try {
-      shot.style.backgroundImage = `url("${canvas.toDataURL('image/jpeg', 0.72)}")`;
-      shot.style.backgroundSize = '160px 90px';
-      shot.style.backgroundPosition = '0 0';
-    } catch { /* frame is not ready */ }
+    if (job !== previewJob) return;
+    const ctx = canvas.getContext('2d');
+    try { ctx.drawImage(previewVideo, 0, 0, canvas.width, canvas.height); } catch { /* frame is not ready */ }
   };
   if (previewVideo.readyState >= 2 && Math.abs((previewVideo.currentTime || 0) - time) < 0.35) {
     paint();
@@ -2471,6 +2493,7 @@ function showScrubPreview(scrub, clientX) {
   const preview = document.querySelector('.scrub-preview');
   if (!preview || !duration) return;
   const time = duration * scrubRatio(scrub, clientX);
+  previewTime = time;
   preview.hidden = false;
   const label = preview.querySelector('.scrub-time');
   if (label) label.textContent = formatClock(time);
@@ -2489,7 +2512,7 @@ function showScrubPreview(scrub, clientX) {
   }
   if (state?.video?.kind === 'youtube') {
     ensureStoryboard(state.video.id);
-    paintStoryboardFrame(shot, time);
+    paintStoryboardFrame(time);
   }
 }
 
@@ -2541,10 +2564,11 @@ function paintHud() {
     scrub.max = String(Math.round(duration * 10));
     scrub.value = String(Math.round(Math.min(duration, Math.max(0, time)) * 10));
   }
-  const rateSelect = hud.querySelector('.cinema-rate');
-  if (rateSelect && document.activeElement !== rateSelect) {
-    rateSelect.value = playbackRate(state.video.rate).toFixed(1);
-  }
+  const rateInput = hud.querySelector('.cinema-rate');
+  const rateLabel = hud.querySelector('.hud-rate');
+  const rate = playbackRate(state.video.rate).toFixed(1);
+  if (rateLabel) rateLabel.textContent = `${rate}×`;
+  if (rateInput && document.activeElement !== rateInput) rateInput.value = rate;
   } catch { /* player is still starting */ }
 }
 
@@ -2582,12 +2606,15 @@ function cinemaHtml() {
     <button class="stage-shield" type="button" data-act="hud-toggle" aria-label="Управление"></button>
     <div class="stage-hud">
       <div class="hud-top">
-        <div class="hud-audio">
+        <div class="hud-tools">
           ${showQuality ? `<select class="cinema-quality" aria-label="Качество">
             ${[['auto', 'Авто'], ['small', '240p'], ['medium', '360p'], ['large', '480p'], ['hd720', '720p'], ['hd1080', '1080p']].map(([item, label]) => `<option value="${item}" ${item === quality ? 'selected' : ''}>${label}</option>`).join('')}
           </select>` : ''}
           ${showCaptions ? `<button class="hud-btn hud-cc${captionsOn() ? ' on' : ''}" type="button" data-act="hud-cc" aria-pressed="${captionsOn() ? 'true' : 'false'}" aria-label="Субтитры">CC</button>` : ''}
+        </div>
+        <div class="hud-audio">
           ${showVolume ? `<label class="hud-volume"><span>Громкость</span><input class="cinema-volume" type="range" min="0" max="100" value="${volume}"></label>` : ''}
+          ${timeline ? `<label class="hud-speed"><span>Скорость</span><input class="cinema-rate" type="range" min="0.1" max="2" step="0.1" value="${playbackRate(state.video?.rate).toFixed(1)}" aria-label="Скорость" ${host ? '' : 'disabled'}><b class="hud-rate">${playbackRate(state.video?.rate).toFixed(1)}×</b></label>` : ''}
         </div>
       </div>
       <div class="hud-bottom">
@@ -2598,12 +2625,11 @@ function cinemaHtml() {
           </button>
           ${host ? `<button class="hud-btn" type="button" data-act="hud-seek" data-by="-5" aria-label="Назад на 5 секунд">−5</button>
           <button class="hud-btn" type="button" data-act="hud-seek" data-by="5" aria-label="Вперёд на 5 секунд">+5</button>` : ''}
-          <label class="hud-speed"><span>Скорость</span><select class="cinema-rate" aria-label="Скорость" ${host ? '' : 'disabled'}>${rateChoices(state.video?.rate)}</select></label>
         </div>
         <div class="hud-line">
           <span class="hud-now">0:00</span>
           <div class="scrub-preview" hidden>
-            <i class="scrub-shot"></i>
+            <canvas class="scrub-shot" width="160" height="90"></canvas>
             <span class="scrub-time">0:00</span>
           </div>
           <input class="hud-scrub" type="range" min="0" max="1000" value="0" aria-label="Таймлайн">
@@ -2720,6 +2746,7 @@ function handleCinemaState(next) {
   else if (next.video?.id !== storyboardFor) {
     storyboard = null;
     storyboardFor = '';
+    sheetImages = new Map();
   }
   state = next;
   renderCinema();

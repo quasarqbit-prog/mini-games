@@ -1693,31 +1693,6 @@ app.get('/browse', async (req, res) => {
 
 const storyboardCache = new Map();
 
-function extractJsonObject(text, start) {
-  let depth = 0;
-  let quote = false;
-  let esc = false;
-  for (let i = start; i < text.length; i += 1) {
-    const ch = text[i];
-    if (quote) {
-      if (esc) esc = false;
-      else if (ch === '\\') esc = true;
-      else if (ch === '"') quote = false;
-      continue;
-    }
-    if (ch === '"') {
-      quote = true;
-      continue;
-    }
-    if (ch === '{') depth += 1;
-    else if (ch === '}') {
-      depth -= 1;
-      if (depth === 0) return text.slice(start, i + 1);
-    }
-  }
-  return '';
-}
-
 function parseStoryboardSpec(spec) {
   const parts = String(spec || '').split('|');
   const base = parts.shift();
@@ -1752,39 +1727,38 @@ function parseStoryboardSpec(spec) {
 async function youtubeStoryboard(id) {
   const cached = storyboardCache.get(id);
   if (cached && Date.now() - cached.at < 30 * 60 * 1000) return cached.spec;
-  const response = await fetch(`https://www.youtube.com/watch?v=${id}`, {
+  const response = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
+    method: 'POST',
     headers: {
-      'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-      'accept-language': 'en',
+      'content-type': 'application/json',
+      'user-agent': 'com.google.android.youtube/20.10.38 (Linux; U; Android 14) gzip',
     },
+    body: JSON.stringify({
+      context: {
+        client: { clientName: 'ANDROID', clientVersion: '20.10.38', androidSdkVersion: 34, hl: 'en', gl: 'US' },
+      },
+      videoId: id,
+    }),
     signal: AbortSignal.timeout(8000),
   });
   if (!response.ok) return null;
-  const html = await response.text();
-  const marker = html.indexOf('ytInitialPlayerResponse');
-  const jsonStart = marker < 0 ? -1 : html.indexOf('{', marker);
-  if (jsonStart < 0) return null;
-  let data = null;
-  try {
-    data = JSON.parse(extractJsonObject(html, jsonStart));
-  } catch {
-    return null;
-  }
+  const data = await response.json();
   const spec = parseStoryboardSpec(data?.storyboards?.playerStoryboardSpecRenderer?.spec);
   if (!spec) return null;
   storyboardCache.set(id, { at: Date.now(), spec });
   return spec;
 }
 
+function storyboardMember(id, token) {
+  if (!/^[\w-]{11}$/.test(id)) return false;
+  const room = findByToken(token);
+  return Boolean(room && room.game === 'cinema' && room.video?.kind === 'youtube' && room.video.id === id);
+}
+
 app.get('/storyboard', async (req, res) => {
   const id = String(req.query.id || '');
   const token = String(req.query.t || '');
-  if (!/^[\w-]{11}$/.test(id)) {
-    res.status(400).json({});
-    return;
-  }
-  const room = findByToken(token);
-  if (!room || room.game !== 'cinema' || room.video?.kind !== 'youtube' || room.video.id !== id) {
+  if (!storyboardMember(id, token)) {
     res.status(403).json({});
     return;
   }
@@ -1797,6 +1771,44 @@ app.get('/storyboard', async (req, res) => {
     res.json(spec);
   } catch {
     res.status(502).json({});
+  }
+});
+
+app.get('/storyboard-sheet', async (req, res) => {
+  const id = String(req.query.id || '');
+  const token = String(req.query.t || '');
+  const sheet = Math.max(0, Math.min(400, Math.floor(Number(req.query.sheet) || 0)));
+  if (!storyboardMember(id, token)) {
+    res.status(403).end();
+    return;
+  }
+  try {
+    const spec = await youtubeStoryboard(id);
+    if (!spec) {
+      res.status(404).end();
+      return;
+    }
+    const sheets = Math.ceil(spec.count / (spec.cols * spec.rows));
+    if (sheet >= sheets) {
+      res.status(404).end();
+      return;
+    }
+    const response = await fetch(spec.url.replace('$M', String(sheet)), {
+      headers: {
+        'user-agent': 'Mozilla/5.0',
+        referer: 'https://www.youtube.com/',
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!response.ok || !response.body) {
+      res.status(502).end();
+      return;
+    }
+    res.setHeader('Content-Type', response.headers.get('content-type') || 'image/webp');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    Readable.fromWeb(response.body).pipe(res);
+  } catch {
+    if (!res.headersSent) res.status(502).end();
   }
 });
 
