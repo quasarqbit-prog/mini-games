@@ -2,6 +2,8 @@ const express = require('express');
 const http = require('http');
 const path = require('path');
 const crypto = require('crypto');
+const dns = require('dns').promises;
+const net = require('net');
 const { Readable } = require('stream');
 const { Server } = require('socket.io');
 
@@ -41,7 +43,7 @@ function identity(token) {
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, { maxHttpBufferSize: 2e6 });
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/api/health', (_req, res) => {
@@ -441,6 +443,7 @@ function attach(socket, room) {
 }
 
 function closeRoom(room, message) {
+  closeDesk(room.code);
   io.to(room.code).emit('closed', { message });
   rooms.delete(room.code);
 }
@@ -905,6 +908,7 @@ function attachCinema(socket, room) {
   applyProfile(member);
   socket.join(room.code);
   broadcast(room);
+  sendDesk(socket, room);
 }
 
 function createCinema(socket) {
@@ -962,6 +966,7 @@ function joinCinema(socket, room) {
   socket.join(room.code);
   pushChat(room, 'system', `${cinemaName(member)} вошёл в кинотеатр.`);
   broadcast(room);
+  sendDesk(socket, room);
 }
 
 function leaveCinema(socket, room) {
@@ -977,6 +982,7 @@ function leaveCinema(socket, room) {
   socket.emit('closed', { message: 'Ты вышел из кинотеатра' });
   const next = connectedCinema(room)[0];
   if (!next) {
+    closeDesk(room.code);
     rooms.delete(room.code);
     return;
   }
@@ -1313,23 +1319,102 @@ io.on('connection', (socket) => {
     if (!member.host && !isAdmin(socket.data.token)) return fail(socket, 'Ссылку ставит хост');
     const parsed = parseWatchUrl(url);
     if (!parsed) return fail(socket, 'Нужна ссылка на YouTube, Twitch, Google Drive или Dropbox');
-    if (room.screen) endScreen(room, 'Демонстрация экрана закончилась.');
+    playParsed(room, member, parsed);
+  });
+
+  socket.on('cinema:desk', ({ mode } = {}) => {
+    const found = requireCinema(socket);
+    if (!found) return fail(socket, 'Комната не найдена');
+    const { room, member } = found;
+    if (!member.host && !isAdmin(socket.data.token)) return fail(socket, 'Браузер открывает хост');
+    const kind = mode === 'twitch' || mode === 'web' || mode === 'youtube' ? mode : '';
+    if (!kind) return fail(socket, 'Неизвестный режим');
+    openDesk(room, member, kind).catch(() => fail(socket, 'Браузер на сервере не запустился'));
+  });
+
+  socket.on('cinema:desk-close', () => {
+    const found = requireCinema(socket);
+    if (!found) return;
+    const { room, member } = found;
+    if (!member.host && !isAdmin(socket.data.token)) return;
+    closeDesk(room.code);
+  });
+
+  socket.on('cinema:desk-take', () => {
+    const found = requireCinema(socket);
+    if (!found) return;
+    const { room, member } = found;
+    if (!member.host && !isAdmin(socket.data.token)) return fail(socket, 'Браузер открывает хост');
+    const desk = desks.get(room.code);
+    if (!desk || desk.mode === 'web') return;
+    const parsed = parseWatchUrl(desk.page.url());
+    const fits = parsed && ((desk.mode === 'youtube' && parsed.service === 'youtube') || (desk.mode === 'twitch' && parsed.service === 'twitch'));
+    if (!fits) return fail(socket, 'Открой ролик или трансляцию');
+    desk.picked = `${parsed.service}:${parsed.id}`;
+    playParsed(room, member, parsed);
+  });
+
+  socket.on('cinema:desk-nav', ({ act, url } = {}) => {
+    const found = requireCinema(socket);
+    if (!found) return;
+    const { room, member } = found;
+    if (!member.host && !isAdmin(socket.data.token)) return;
+    const desk = desks.get(room.code);
+    if (!desk || desk.closed) return;
+    enqueueDesk(desk, async () => {
+      if (act === 'back') await desk.page.goBack({ timeout: 8000 }).catch(() => {});
+      else if (act === 'forward') await desk.page.goForward({ timeout: 8000 }).catch(() => {});
+      else if (act === 'reload') await desk.page.reload({ timeout: 15000, waitUntil: 'domcontentloaded' }).catch(() => {});
+      else if (act === 'go') {
+        let href = String(url || '').trim();
+        if (href && !/^https?:\/\//i.test(href)) href = `https://${href}`;
+        if (!(await requestAllowed(href)) || !mainAllowed(desk.mode, href)) {
+          fail(socket, 'Эта страница недоступна');
+          return;
+        }
+        desk.armed = desk.mode !== 'web';
+        await desk.page.goto(href, { timeout: 20000, waitUntil: 'domcontentloaded' }).catch(() => {});
+      }
+    });
+  });
+
+  socket.on('cinema:desk-input', (payload = {}) => {
+    const found = requireCinema(socket);
+    if (!found) return;
+    const { room, member } = found;
+    if (!member.host && !isAdmin(socket.data.token)) return;
+    const desk = desks.get(room.code);
+    if (!desk || desk.closed) return;
     const now = Date.now();
-    const rate = playbackRate(room.video.rate);
-    room.video = {
-      ...blankVideo(),
-      kind: parsed.kind,
-      service: parsed.service,
-      id: parsed.id,
-      live: parsed.live,
-      clip: parsed.clip,
-      upstream: parsed.upstream,
-      playing: Boolean(parsed.live),
-      updatedAt: now,
-      rate,
-    };
-    pushChat(room, 'system', `${cinemaName(member)} включил ${watchLabel(parsed)}.`);
-    broadcast(room);
+    if (now - desk.inputAt < 16 && payload.type === 'move') return;
+    desk.inputAt = now;
+    const x = Math.min(1, Math.max(0, Number(payload.x) || 0)) * DESK_W;
+    const y = Math.min(1, Math.max(0, Number(payload.y) || 0)) * DESK_H;
+    if (payload.type === 'move' || payload.type === 'down') {
+      io.to(room.code).emit('desk:cursor', { x: x / DESK_W, y: y / DESK_H });
+    }
+    enqueueDesk(desk, async () => {
+      if (desk.closed) return;
+      if (payload.type === 'move') await desk.page.mouse.move(x, y);
+      else if (payload.type === 'down') {
+        desk.armed = true;
+        await desk.page.mouse.move(x, y);
+        await desk.page.mouse.down();
+      } else if (payload.type === 'up') await desk.page.mouse.up();
+      else if (payload.type === 'wheel') {
+        const dx = Math.min(400, Math.max(-400, Number(payload.deltaX) || 0));
+        const dy = Math.min(400, Math.max(-400, Number(payload.deltaY) || 0));
+        await desk.page.mouse.wheel(dx, dy);
+      } else if (payload.type === 'type') {
+        desk.armed = true;
+        const text = String(payload.text || '').slice(0, 1);
+        if (text) await desk.page.keyboard.type(text);
+      } else if (payload.type === 'key') {
+        desk.armed = true;
+        const key = DESK_KEYS[payload.key];
+        if (key) await desk.page.keyboard.press(key);
+      }
+    });
   });
 
   socket.on('cinema:pause', ({ time } = {}) => {
@@ -1502,7 +1587,10 @@ setInterval(() => {
       room.members = room.members.filter((member) => member.connected || now - (member.disconnectedAt || now) < 10 * 60 * 1000);
       const alive = room.members.some((member) => member.connected);
       const stale = room.members.every((member) => !member.connected && now - (member.disconnectedAt || now) > 10 * 60 * 1000);
-      if (!room.members.length || (!alive && stale)) rooms.delete(room.code);
+      if (!room.members.length || (!alive && stale)) {
+        closeDesk(room.code);
+        rooms.delete(room.code);
+      }
       continue;
     }
     const hostGone = room.host && !room.host.connected && now - (room.host.disconnectedAt || now) > 10 * 60 * 1000;
@@ -1562,134 +1650,298 @@ function pipeCloudResponse(response, res) {
   Readable.fromWeb(response.body).pipe(res);
 }
 
-const browseHits = new Map();
+const DESK_W = 1280;
+const DESK_H = 720;
+const DESK_KEYS = {
+  Enter: 'Enter',
+  Backspace: 'Backspace',
+  Tab: 'Tab',
+  Escape: 'Escape',
+  ArrowLeft: 'ArrowLeft',
+  ArrowRight: 'ArrowRight',
+  ArrowUp: 'ArrowUp',
+  ArrowDown: 'ArrowDown',
+  Delete: 'Delete',
+  Home: 'Home',
+  End: 'End',
+};
+const DESK_HOME = {
+  youtube: 'https://www.youtube.com',
+  twitch: 'https://www.twitch.tv',
+  web: 'https://www.google.com/?hl=ru',
+};
+const desks = new Map();
+const deskOpening = new Map();
+const hostVerdict = new Map();
 
-function allowBrowse(token) {
+function playParsed(room, member, parsed) {
+  if (!member || !parsed) return;
+  if (room.video?.service === parsed.service && room.video?.id === parsed.id) return;
+  if (room.screen) endScreen(room, 'Демонстрация экрана закончилась.');
   const now = Date.now();
-  const hits = (browseHits.get(token) || []).filter((at) => now - at < 60000);
-  if (hits.length >= 20) return false;
-  hits.push(now);
-  browseHits.set(token, hits);
-  return true;
-}
-
-function youtubeText(node) {
-  if (!node) return '';
-  if (typeof node.simpleText === 'string') return node.simpleText;
-  return (node.runs || []).map((part) => part.text || '').join('');
-}
-
-async function searchYouTube(query) {
-  const response = await fetch('https://www.youtube.com/youtubei/v1/search?prettyPrint=false', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'user-agent': 'Mozilla/5.0' },
-    body: JSON.stringify({
-      context: { client: { clientName: 'WEB', clientVersion: '2.20241001.00.00', hl: 'ru', gl: 'RU' } },
-      query,
-    }),
-    signal: AbortSignal.timeout(8000),
-  });
-  if (!response.ok) return [];
-  const data = await response.json();
-  const items = [];
-  const walk = (node) => {
-    if (!node || typeof node !== 'object' || items.length >= 12) return;
-    const video = node.videoRenderer;
-    if (video?.videoId && /^[\w-]{11}$/.test(video.videoId)) {
-      const title = youtubeText(video.title).replace(/\s+/g, ' ').trim().slice(0, 140);
-      const thumbs = video.thumbnail?.thumbnails || [];
-      if (title && !items.some((item) => item.id === video.videoId)) {
-        items.push({
-          id: video.videoId,
-          title,
-          author: youtubeText(video.ownerText).replace(/\s+/g, ' ').trim().slice(0, 80),
-          thumb: thumbs.at(-1)?.url || `https://i.ytimg.com/vi/${video.videoId}/hqdefault.jpg`,
-          url: `https://www.youtube.com/watch?v=${video.videoId}`,
-          live: false,
-        });
-      }
-    }
-    const children = Array.isArray(node) ? node : Object.values(node);
-    children.forEach(walk);
+  room.video = {
+    ...blankVideo(),
+    kind: parsed.kind,
+    service: parsed.service,
+    id: parsed.id,
+    live: parsed.live,
+    clip: parsed.clip,
+    upstream: parsed.upstream,
+    playing: Boolean(parsed.live),
+    updatedAt: now,
+    rate: playbackRate(room.video?.rate),
   };
-  walk(data);
-  return items;
+  pushChat(room, 'system', `${cinemaName(member)} включил ${watchLabel(parsed)}.`);
+  broadcast(room);
 }
 
-async function searchTwitch(query) {
-  const response = await fetch('https://gql.twitch.tv/gql', {
-    method: 'POST',
-    headers: {
-      'client-id': 'kimne78kx3ncx6brgo4mv6wki5h1ko',
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      query: `query ($q: String!) {
-        searchFor(platform: "web", userQuery: $q, options: { targets: [{ index: VOD }, { index: CHANNEL }] }) {
-          videos { items { id title owner { displayName } previewThumbnailURL(width: 320, height: 180) } }
-          channels { items { login displayName profileImageURL(width: 150) stream { id } } }
-        }
-      }`,
-      variables: { q: query },
-    }),
-    signal: AbortSignal.timeout(8000),
-  });
-  if (!response.ok) return [];
-  const data = await response.json();
-  const found = data?.data?.searchFor || {};
-  const items = [];
-  for (const channel of found.channels?.items || []) {
-    if (!channel?.stream?.id || !/^[a-zA-Z0-9_]{3,25}$/.test(channel.login || '')) continue;
-    items.push({
-      id: channel.login.toLowerCase(),
-      title: String(channel.displayName || channel.login).slice(0, 80),
-      author: 'В эфире',
-      thumb: String(channel.profileImageURL || ''),
-      url: `https://www.twitch.tv/${channel.login.toLowerCase()}`,
-      live: true,
-    });
-    if (items.length >= 4) break;
+function isPrivateIp(address) {
+  const ip = String(address || '').toLowerCase().replace(/^::ffff:/, '');
+  if (!net.isIP(ip)) return true;
+  if (net.isIP(ip) === 6) {
+    return ip === '::1' || ip === '::' || ip.startsWith('fc') || ip.startsWith('fd') || ip.startsWith('fe80:');
   }
-  for (const video of found.videos?.items || []) {
-    if (!/^\d+$/.test(String(video?.id || '')) || !video.title) continue;
-    items.push({
-      id: String(video.id),
-      title: String(video.title).replace(/\s+/g, ' ').trim().slice(0, 140),
-      author: String(video.owner?.displayName || '').slice(0, 80),
-      thumb: String(video.previewThumbnailURL || ''),
-      url: `https://www.twitch.tv/videos/${video.id}`,
-      live: false,
-    });
-    if (items.length >= 12) break;
-  }
-  return items;
+  const parts = ip.split('.').map((part) => Number(part));
+  const [a, b] = parts;
+  if (a === 0 || a === 10 || a === 127) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true;
+  return false;
 }
 
-app.get('/browse', async (req, res) => {
-  const token = String(req.query.t || '');
-  const room = findByToken(token);
-  const member = room?.game === 'cinema' ? cinemaMember(room, token) : null;
-  if (!member?.host && !isAdmin(token)) {
-    res.status(403).json({ items: [] });
-    return;
+async function hostIsPublic(hostname) {
+  const host = String(hostname || '').replace(/\.+$/, '').toLowerCase();
+  if (!host || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host === 'metadata.google.internal') return false;
+  const cached = hostVerdict.get(host);
+  if (cached && Date.now() - cached.at < 10 * 60 * 1000) return cached.ok;
+  let ok = false;
+  if (net.isIP(host)) ok = !isPrivateIp(host);
+  else {
+    try {
+      const records = await dns.lookup(host, { all: true });
+      ok = records.length > 0 && records.every((item) => !isPrivateIp(item.address));
+    } catch {
+      ok = false;
+    }
   }
-  if (!allowBrowse(token)) {
-    res.status(429).json({ items: [], error: 'Слишком много запросов. Подожди минуту.' });
-    return;
-  }
-  const service = req.query.service === 'twitch' ? 'twitch' : req.query.service === 'youtube' ? 'youtube' : '';
-  const query = String(req.query.q || '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 80);
-  if (!service || !query) {
-    res.status(400).json({ items: [] });
-    return;
-  }
+  hostVerdict.set(host, { at: Date.now(), ok });
+  return ok;
+}
+
+async function requestAllowed(raw) {
+  let url;
+  try { url = new URL(raw); } catch { return false; }
+  if (url.protocol === 'blob:' || url.protocol === 'data:') return true;
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+  if (url.username || url.password) return false;
+  return hostIsPublic(url.hostname);
+}
+
+function mainAllowed(mode, raw) {
+  if (raw === 'about:blank') return true;
+  let url;
+  try { url = new URL(raw); } catch { return false; }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+  if (mode === 'web') return true;
+  const host = url.hostname.toLowerCase().replace(/^www\./, '');
+  const rules = mode === 'twitch'
+    ? ['twitch.tv', 'clips.twitch.tv', 'player.twitch.tv', 'passport.twitch.tv']
+    : ['youtube.com', 'youtu.be', 'youtube-nocookie.com', 'google.com', 'gstatic.com', 'googleapis.com'];
+  return rules.some((item) => host === item || host.endsWith(`.${item}`));
+}
+
+function deskStatus(desk) {
+  return { mode: desk.mode, url: desk.url || DESK_HOME[desk.mode] || '', title: desk.title || '' };
+}
+
+function sendDesk(socket, room) {
+  const desk = desks.get(room.code);
+  if (!desk || desk.closed) return;
+  socket.emit('desk:status', deskStatus(desk));
+  if (desk.lastFrame) socket.emit('desk:frame', desk.lastFrame);
+}
+
+function enqueueDesk(desk, job) {
+  desk.chain = desk.chain.then(job).catch(() => {});
+}
+
+async function launchDeskBrowser() {
+  let chromium;
   try {
-    const items = service === 'twitch' ? await searchTwitch(query) : await searchYouTube(query);
-    res.json({ items });
+    chromium = require('playwright').chromium;
   } catch {
-    res.status(502).json({ items: [], error: 'Поиск сейчас не отвечает.' });
+    return null;
   }
-});
+  const options = {
+    headless: true,
+    args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled', '--lang=ru-RU'],
+    ignoreDefaultArgs: ['--enable-automation'],
+  };
+  const attempts = [
+    () => chromium.launch(options),
+    () => chromium.launch({ ...options, channel: 'chrome' }),
+    () => chromium.launch({ ...options, channel: 'msedge' }),
+  ];
+  let last = null;
+  for (const attempt of attempts) {
+    try {
+      return await attempt();
+    } catch (error) {
+      last = error;
+    }
+  }
+  console.error('desk browser failed', last?.message || last);
+  return null;
+}
+
+function closeDesk(code, notify = true) {
+  deskOpening.set(code, (deskOpening.get(code) || 0) + 1);
+  const desk = desks.get(code);
+  if (!desk) return;
+  desk.closed = true;
+  desks.delete(code);
+  clearInterval(desk.timer);
+  desk.cdp?.send('Page.stopScreencast').catch(() => {});
+  desk.browser?.close().catch(() => {});
+  if (notify) io.to(code).emit('desk:closed');
+}
+
+async function openDesk(room, member, mode) {
+  if (desks.size >= 2 && !desks.has(room.code)) {
+    const socketId = member.socketId;
+    const socket = io.sockets.sockets.get(socketId);
+    if (socket) fail(socket, 'Сейчас уже открыто слишком много браузеров');
+    return;
+  }
+  const gen = (deskOpening.get(room.code) || 0) + 1;
+  deskOpening.set(room.code, gen);
+  closeDesk(room.code, false);
+  deskOpening.set(room.code, gen);
+  const browser = await launchDeskBrowser();
+  if (deskOpening.get(room.code) !== gen) {
+    await browser?.close().catch(() => {});
+    return;
+  }
+  if (!browser) {
+    const socket = io.sockets.sockets.get(member.socketId);
+    if (socket) fail(socket, 'Браузер на сервере не запустился');
+    return;
+  }
+  const context = await browser.newContext({
+    viewport: { width: DESK_W, height: DESK_H },
+    locale: 'ru-RU',
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+  });
+  await context.addInitScript(() => {
+    window.open = (url) => {
+      try { if (url) location.assign(url); } catch { /* keep the click in this window */ }
+      return null;
+    };
+  });
+  const page = await context.newPage();
+  const desk = {
+    mode,
+    page,
+    browser,
+    cdp: null,
+    closed: false,
+    armed: false,
+    url: DESK_HOME[mode],
+    title: '',
+    lastFrame: null,
+    sentAt: 0,
+    inputAt: 0,
+    chain: Promise.resolve(),
+    picked: '',
+    pendingKey: '',
+    pendingAt: 0,
+    pending: null,
+    byToken: member.token,
+    timer: null,
+  };
+  if (deskOpening.get(room.code) !== gen) {
+    await browser.close().catch(() => {});
+    return;
+  }
+  desks.set(room.code, desk);
+  await page.route('**/*', async (route) => {
+    if (desk.closed) {
+      await route.abort().catch(() => {});
+      return;
+    }
+    if (await requestAllowed(route.request().url())) await route.continue().catch(() => {});
+    else await route.abort().catch(() => {});
+  });
+  page.on('framenavigated', async (frame) => {
+    if (desk.closed || frame !== page.mainFrame()) return;
+    const href = frame.url();
+    if (href === 'about:blank') return;
+    if (!(await requestAllowed(href)) || !mainAllowed(desk.mode, href)) {
+      await page.goBack({ timeout: 4000 }).catch(async () => {
+        await page.goto(DESK_HOME[desk.mode], { timeout: 15000, waitUntil: 'domcontentloaded' }).catch(() => {});
+      });
+    }
+  });
+  context.on('page', (popup) => {
+    if (popup === page) return;
+    popup.once('framenavigated', async () => {
+      const href = popup.url();
+      await popup.close().catch(() => {});
+      if (desk.closed || href === 'about:blank') return;
+      if (await requestAllowed(href) && mainAllowed(desk.mode, href)) {
+        desk.armed = desk.mode !== 'web';
+        await page.goto(href, { timeout: 20000, waitUntil: 'domcontentloaded' }).catch(() => {});
+      }
+    });
+  });
+  const cdp = await context.newCDPSession(page);
+  desk.cdp = cdp;
+  cdp.on('Page.screencastFrame', ({ data, sessionId }) => {
+    cdp.send('Page.screencastFrameAck', { sessionId }).catch(() => {});
+    if (desk.closed) return;
+    const jpeg = Buffer.from(data, 'base64');
+    desk.lastFrame = jpeg;
+    const now = Date.now();
+    if (now - desk.sentAt >= 80) {
+      desk.sentAt = now;
+      io.to(room.code).emit('desk:frame', jpeg);
+    }
+  });
+  await cdp.send('Page.startScreencast', {
+    format: 'jpeg',
+    quality: 42,
+    maxWidth: DESK_W,
+    maxHeight: DESK_H,
+    everyNthFrame: 1,
+  });
+  desk.timer = setInterval(() => {
+    if (desk.closed) return;
+    let href = '';
+    try { href = page.url(); } catch { return; }
+    if (href && href !== desk.url) {
+      desk.url = href;
+      io.to(room.code).emit('desk:status', deskStatus(desk));
+    }
+    if (desk.mode === 'web' || !desk.armed) return;
+    const parsed = parseWatchUrl(href);
+    const fits = parsed && ((desk.mode === 'youtube' && parsed.service === 'youtube') || (desk.mode === 'twitch' && parsed.service === 'twitch'));
+    const key = fits ? `${parsed.service}:${parsed.id}` : '';
+    if (key !== desk.pendingKey) {
+      desk.pendingKey = key;
+      desk.pendingAt = Date.now();
+      desk.pending = fits ? parsed : null;
+    }
+    if (desk.pending && desk.picked !== desk.pendingKey && Date.now() - desk.pendingAt > 500) {
+      desk.picked = desk.pendingKey;
+      const actor = cinemaMember(room, desk.byToken) || room.members.find((item) => item.host);
+      playParsed(room, actor, desk.pending);
+    }
+  }, 400);
+  io.to(room.code).emit('desk:status', deskStatus(desk));
+  await page.goto(DESK_HOME[mode], { timeout: 20000, waitUntil: 'domcontentloaded' }).catch(() => {});
+}
 
 const storyboardCache = new Map();
 

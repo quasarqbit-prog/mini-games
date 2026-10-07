@@ -81,13 +81,10 @@ let replyDraft = null;
 let emojiOpen = false;
 let pickerTab = 'emoji';
 let stickerMenuId = '';
-let browseOpen = false;
-let browseService = '';
-let browseQuery = '';
-let browseItems = [];
-let browsePick = -1;
-let browseNote = '';
-let browseLoading = false;
+function emptyDesk() {
+  return { picking: false, booting: false, live: false, mode: '', url: '', shell: '' };
+}
+let desk = emptyDesk();
 
 function toast(text) {
   const el = document.createElement('div');
@@ -1129,6 +1126,7 @@ function adminMenuHtml() {
         <button class="btn wide" type="submit">Сменить видео</button>
       </form>
       <button class="btn ghost wide" type="button" data-act="browse-open">Браузер видео</button>
+      <button class="btn ghost wide" type="button" data-act="web-open">Браузер</button>
       <p class="note">Можно сменить ролик, даже если ты не хост.</p>`;
   } else if (state?.game === 'battle' && state.phase !== 'lobby') {
     const count = (state.foeFleet || []).filter((ship) => ship.r != null).length;
@@ -1157,7 +1155,7 @@ function render() {
     renderCinema();
     return;
   }
-  browseOpen = false;
+  desk = emptyDesk();
   captureForm();
   document.body.classList.remove('in-cinema');
   document.body.classList.toggle('in-game', Boolean(state && state.phase !== 'lobby'));
@@ -1356,42 +1354,33 @@ document.addEventListener('click', (event) => {
     applyCaptions();
   }
   if (act === 'browse-open' && (state?.youHost || isLocalAdmin())) {
-    browseOpen = true;
-    browseService = '';
-    browsePick = -1;
-    browseItems = [];
-    browseNote = '';
-    paintBrowse();
+    desk = { ...emptyDesk(), picking: true, shell: 'pick' };
+    paintDesk();
+  }
+  if (act === 'web-open' && (state?.youHost || isLocalAdmin())) {
+    desk = { ...emptyDesk(), booting: true, mode: 'web', shell: 'boot:web' };
+    paintDesk();
+    socket.emit('cinema:desk', { mode: 'web' });
   }
   if (act === 'browse-close') {
-    browseOpen = false;
-    paintBrowse();
+    const live = desk.live;
+    desk = emptyDesk();
+    paintDesk();
+    if (live) socket.emit('cinema:desk-close');
   }
   if (act === 'browse-back') {
-    browseService = '';
-    browseItems = [];
-    browsePick = -1;
-    browseNote = '';
-    paintBrowse();
+    if (desk.live) socket.emit('cinema:desk-close');
+    desk = { ...emptyDesk(), picking: true, shell: 'pick' };
+    paintDesk();
   }
   if (act === 'browse-service') {
-    browseService = el.dataset.service === 'twitch' ? 'twitch' : 'youtube';
-    browseItems = [];
-    browsePick = -1;
-    browseNote = '';
-    paintBrowse();
+    const mode = el.dataset.service === 'twitch' ? 'twitch' : 'youtube';
+    desk = { ...emptyDesk(), booting: true, mode, shell: `boot:${mode}` };
+    paintDesk();
+    socket.emit('cinema:desk', { mode });
   }
-  if (act === 'browse-pick') {
-    browsePick = Number(el.dataset.i);
-    paintBrowse();
-  }
-  if (act === 'browse-confirm') {
-    const item = browseItems[browsePick];
-    if (!item || !(state?.youHost || isLocalAdmin())) return;
-    browseOpen = false;
-    paintBrowse();
-    socket.emit('cinema:video', { url: item.url });
-  }
+  if (act === 'desk-nav') socket.emit('cinema:desk-nav', { act: el.dataset.nav });
+  if (act === 'desk-take') socket.emit('cinema:desk-take');
   if (act === 'hud-toggle') toggleHud(el);
   if (act === 'hud-pause') hudTogglePause();
   if (act === 'hud-seek') hudSeek(Number(el.dataset.by) || 0);
@@ -1459,9 +1448,9 @@ document.addEventListener('submit', (event) => {
     socket.emit('cinema:video', { url: input.value });
     return;
   }
-  if (act === 'browse-search') {
-    searchBrowse();
-    return;
+  if (act === 'desk-go') {
+    const input = form.querySelector('input');
+    socket.emit('cinema:desk-nav', { act: 'go', url: input?.value || '' });
   }
   if (act === 'save-profile') {
     const name = form.querySelector('.profile-name').value.replace(/\s+/g, ' ').trim().slice(0, 20);
@@ -1479,7 +1468,7 @@ document.addEventListener('submit', (event) => {
 document.addEventListener('input', (event) => {
   const target = event.target;
   if (target?.classList?.contains('cinema-url')) cinemaUrlDraft = target.value;
-  if (target?.classList?.contains('browse-query')) browseQuery = target.value;
+  if (target?.classList?.contains('desk-url')) desk.url = target.value;
   if (event.target?.classList?.contains('cinema-volume')) {
     const value = Number(target.value);
     localStorage.setItem(CINEMA_VOL_KEY, String(value));
@@ -1565,6 +1554,19 @@ document.addEventListener('change', async (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
+  if (document.activeElement?.classList?.contains('desk-screen') && desk.live && (state?.youHost || isLocalAdmin())) {
+    if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      event.preventDefault();
+      socket.emit('cinema:desk-input', { type: 'type', text: event.key });
+      return;
+    }
+    const named = ['Enter', 'Backspace', 'Tab', 'Escape', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Delete', 'Home', 'End'];
+    if (named.includes(event.key)) {
+      event.preventDefault();
+      socket.emit('cinema:desk-input', { type: 'key', key: event.key });
+      return;
+    }
+  }
   if (event.key === 'F2') {
     if (!isLocalAdmin()) return;
     event.preventDefault();
@@ -1761,6 +1763,7 @@ socket.on('closed', ({ message }) => {
   lobbyTab = 'chat';
   lobbyUnread = 0;
   fleetDraft = null;
+  desk = emptyDesk();
   render();
   toast(message || 'Комната закрыта');
 });
@@ -1772,6 +1775,11 @@ socket.on('errorMsg', (payload) => {
     render();
   }
   toast(text || 'Ошибка');
+  if (desk.booting && /браузер|страница/i.test(text || '')) {
+    const mode = desk.mode;
+    desk = mode === 'web' ? emptyDesk() : { ...emptyDesk(), picking: true, shell: 'pick' };
+    paintDesk();
+  }
   if (payload?.shake) shakeDraft();
 });
 
@@ -2134,6 +2142,7 @@ function hostRoomCard() {
       </div>
       <button class="btn" type="button" data-act="copy-link">Скопировать ссылку</button>
       <button class="btn ghost wide" type="button" data-act="browse-open">Браузер видео</button>
+      <button class="btn ghost wide" type="button" data-act="web-open">Браузер</button>
       ${state.video?.id ? `<form data-act="cinema-url">
         <input class="cinema-url" value="${escapeHtml(cinemaUrlDraft)}" placeholder="Другая ссылка" autocomplete="off">
         <button class="btn" type="submit">Сменить</button>
@@ -2141,73 +2150,215 @@ function hostRoomCard() {
     </div>`;
 }
 
-function paintBrowse() {
+function deskShell() {
+  if (desk.live) return `live:${desk.mode}`;
+  if (desk.booting) return `boot:${desk.mode}`;
+  if (desk.picking) return 'pick';
+  return '';
+}
+
+function paintDesk() {
   const root = document.querySelector('.browse');
   if (!root) return;
-  root.hidden = !browseOpen;
-  if (!browseOpen) {
+  const shell = deskShell();
+  const open = Boolean(shell);
+  root.hidden = !open;
+  if (!open) {
     root.innerHTML = '';
+    desk.shell = '';
     return;
   }
-  if (!browseService) {
+  if (root.dataset.shell === shell) {
+    const field = root.querySelector('.desk-url');
+    if (field && document.activeElement !== field) field.value = desk.url || '';
+    return;
+  }
+  root.dataset.shell = shell;
+  desk.shell = shell;
+  const control = Boolean(state?.youHost || isLocalAdmin());
+  if (shell === 'pick') {
     root.innerHTML = `
       <div class="browse-head"><b>Где искать видео?</b><button type="button" class="btn ghost" data-act="browse-close">Закрыть</button></div>
       <div class="browse-services">
         <button type="button" data-act="browse-service" data-service="youtube">YouTube</button>
         <button type="button" data-act="browse-service" data-service="twitch">Twitch</button>
-      </div>`;
+      </div>
+      <p class="note">Откроется сам сайт. Нажми на видео — ссылка встанет и ролик включится у всех.</p>`;
     return;
   }
-  const cards = browseItems.map((item, index) => {
-    const thumb = /^https:\/\//.test(item.thumb || '') ? escapeHtml(item.thumb) : '';
-    return `
-      <button type="button" class="browse-card${index === browsePick ? ' on' : ''}" data-act="browse-pick" data-i="${index}">
-        ${thumb ? `<img alt="" src="${thumb}">` : '<i class="browse-ph"></i>'}
-        <b>${escapeHtml(item.title || '')}</b>
-        <span>${escapeHtml(item.live ? 'В эфире' : (item.author || ''))}</span>
-      </button>`;
-  }).join('');
-  const grid = browseLoading
-    ? '<p class="note">Ищем…</p>'
-    : (cards || (browseNote ? '' : '<p class="note">Напиши запрос и нажми «Найти».</p>'));
+  const title = desk.mode === 'twitch' ? 'Twitch' : desk.mode === 'web' ? 'Браузер' : 'YouTube';
+  const waiting = shell.startsWith('boot');
+  const nav = control ? `
+    <button type="button" class="btn ghost" data-act="desk-nav" data-nav="back">Назад</button>
+    <button type="button" class="btn ghost" data-act="desk-nav" data-nav="forward">Вперёд</button>
+    <button type="button" class="btn ghost" data-act="desk-nav" data-nav="reload">Обновить</button>` : '';
+  const take = control && desk.mode !== 'web'
+    ? '<button type="button" class="btn" data-act="desk-take">Включить это видео</button>'
+    : '';
+  const address = control
+    ? `<form class="browse-search" data-act="desk-go"><input class="desk-url" value="${escapeHtml(desk.url || '')}" placeholder="Адрес" autocomplete="off"><button class="btn" type="submit">Открыть</button></form>`
+    : `<p class="desk-url-view">${escapeHtml(desk.url || 'Запускаем…')}</p>`;
   root.innerHTML = `
     <div class="browse-head">
-      <button type="button" class="btn ghost" data-act="browse-back">Назад</button>
-      <b>${browseService === 'twitch' ? 'Twitch' : 'YouTube'}</b>
-      <button type="button" class="btn ghost" data-act="browse-close">Закрыть</button>
+      ${desk.mode === 'web' || !control ? '' : '<button type="button" class="btn ghost" data-act="browse-back">К выбору</button>'}
+      <b>${title}</b>
+      ${control ? '<button type="button" class="btn ghost" data-act="browse-close">Закрыть</button>' : '<span class="note">Смотрит вся комната</span>'}
     </div>
-    <form class="browse-search" data-act="browse-search">
-      <input class="browse-query" value="${escapeHtml(browseQuery)}" placeholder="Поиск" autocomplete="off">
-      <button class="btn" type="submit">Найти</button>
-    </form>
-    ${browseNote ? `<p class="note">${escapeHtml(browseNote)}</p>` : ''}
-    <div class="browse-grid">${grid}</div>
-    <button class="btn" type="button" data-act="browse-confirm" ${browsePick < 0 ? 'disabled' : ''}>Подтвердить</button>`;
+    ${address}
+    <div class="desk-stage">
+      <canvas class="desk-screen" tabindex="0" width="1280" height="720"></canvas>
+      <i class="desk-cursor" hidden></i>
+      ${waiting ? '<p class="desk-wait">Запускаем браузер…</p>' : ''}
+    </div>
+    <div class="desk-tools">${nav}${take}</div>
+    <p class="note">${desk.mode === 'web' ? 'Поиск Google видят все. Страницей управляет хост.' : 'Нажми на ролик на сайте — он включится в кинотеатре.'}</p>`;
 }
 
-async function searchBrowse() {
-  const query = browseQuery.trim();
-  if (!browseService || !query) {
-    browseNote = 'Напиши, что искать.';
-    paintBrowse();
-    return;
-  }
-  browseLoading = true;
-  browseNote = '';
-  browsePick = -1;
-  paintBrowse();
-  try {
-    const response = await fetch(`/browse?service=${encodeURIComponent(browseService)}&q=${encodeURIComponent(query)}&t=${encodeURIComponent(token)}`);
-    const data = await response.json();
-    browseItems = Array.isArray(data.items) ? data.items : [];
-    browseNote = data.error || (browseItems.length ? '' : 'Ничего не нашлось.');
-  } catch {
-    browseItems = [];
-    browseNote = 'Поиск сейчас не отвечает.';
-  }
-  browseLoading = false;
-  if (browseOpen) paintBrowse();
+function deskPoint(event, canvas) {
+  const rect = canvas.getBoundingClientRect();
+  if (!canvas.width || !canvas.height || !rect.width || !rect.height) return null;
+  const scale = Math.min(rect.width / canvas.width, rect.height / canvas.height);
+  const drawnW = canvas.width * scale;
+  const drawnH = canvas.height * scale;
+  const offX = (rect.width - drawnW) / 2;
+  const offY = (rect.height - drawnH) / 2;
+  const x = (event.clientX - rect.left - offX) / drawnW;
+  const y = (event.clientY - rect.top - offY) / drawnH;
+  if (x < 0 || y < 0 || x > 1 || y > 1) return null;
+  return { x, y };
 }
+
+function placeDeskCursor(x, y) {
+  const canvas = document.querySelector('.desk-screen');
+  const dot = document.querySelector('.desk-cursor');
+  if (!canvas || !dot || !canvas.width) return;
+  const rect = canvas.getBoundingClientRect();
+  const stage = canvas.parentElement.getBoundingClientRect();
+  const scale = Math.min(rect.width / canvas.width, rect.height / canvas.height);
+  const drawnW = canvas.width * scale;
+  const drawnH = canvas.height * scale;
+  const offX = rect.left - stage.left + (rect.width - drawnW) / 2;
+  const offY = rect.top - stage.top + (rect.height - drawnH) / 2;
+  dot.hidden = false;
+  dot.style.left = `${offX + x * drawnW}px`;
+  dot.style.top = `${offY + y * drawnH}px`;
+}
+
+let deskFrame = null;
+let deskDrawing = false;
+let deskDown = false;
+let deskMoveAt = 0;
+
+function queueDeskFrame(payload) {
+  const bytes = payload instanceof ArrayBuffer
+    ? new Uint8Array(payload)
+    : ArrayBuffer.isView(payload)
+      ? new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength)
+      : null;
+  if (!bytes) return;
+  deskFrame = bytes;
+  if (deskDrawing) return;
+  deskDrawing = true;
+  (async () => {
+    while (deskFrame) {
+      const next = deskFrame;
+      deskFrame = null;
+      try {
+        const bmp = await createImageBitmap(new Blob([next], { type: 'image/jpeg' }));
+        const canvas = document.querySelector('.desk-screen');
+        if (canvas) {
+          if (canvas.width !== bmp.width || canvas.height !== bmp.height) {
+            canvas.width = bmp.width;
+            canvas.height = bmp.height;
+          }
+          canvas.getContext('2d').drawImage(bmp, 0, 0);
+          document.querySelector('.desk-wait')?.remove();
+        }
+        bmp.close?.();
+      } catch { /* frame is still arriving */ }
+    }
+    deskDrawing = false;
+  })();
+}
+
+function sendDeskPoint(type, point, extra = {}) {
+  if (!point || !(state?.youHost || isLocalAdmin())) return;
+  socket.emit('cinema:desk-input', { type, x: point.x, y: point.y, ...extra });
+  if (type === 'move' || type === 'down') placeDeskCursor(point.x, point.y);
+}
+
+document.addEventListener('pointerdown', (event) => {
+  const canvas = event.target.closest?.('.desk-screen');
+  if (!canvas || !desk.live || !(state?.youHost || isLocalAdmin())) return;
+  event.preventDefault();
+  canvas.focus();
+  const point = deskPoint(event, canvas);
+  if (!point) return;
+  deskDown = true;
+  sendDeskPoint('down', point);
+});
+
+document.addEventListener('pointermove', (event) => {
+  const canvas = document.querySelector('.desk-screen');
+  if (!canvas || !desk.live || !(state?.youHost || isLocalAdmin())) return;
+  if (!deskDown && event.target?.closest?.('.desk-screen') !== canvas) return;
+  const now = Date.now();
+  if (now - deskMoveAt < 40) return;
+  deskMoveAt = now;
+  const point = deskPoint(event, canvas);
+  if (!point) return;
+  sendDeskPoint('move', point);
+});
+
+document.addEventListener('pointerup', (event) => {
+  if (!deskDown) return;
+  deskDown = false;
+  const canvas = document.querySelector('.desk-screen');
+  const point = canvas ? deskPoint(event, canvas) : null;
+  if (point) sendDeskPoint('up', point);
+  else if (state?.youHost || isLocalAdmin()) socket.emit('cinema:desk-input', { type: 'up', x: 0, y: 0 });
+});
+
+document.addEventListener('wheel', (event) => {
+  const canvas = event.target.closest?.('.desk-screen');
+  if (!canvas || !desk.live || !(state?.youHost || isLocalAdmin())) return;
+  event.preventDefault();
+  const point = deskPoint(event, canvas);
+  if (!point) return;
+  sendDeskPoint('wheel', point, { deltaX: event.deltaX, deltaY: event.deltaY });
+}, { passive: false });
+
+socket.on('desk:status', (payload) => {
+  if (state?.game !== 'cinema') return;
+  const mode = payload?.mode === 'twitch' || payload?.mode === 'web' ? payload.mode : 'youtube';
+  desk.picking = false;
+  desk.booting = false;
+  desk.live = true;
+  desk.mode = mode;
+  desk.url = payload?.url || '';
+  paintDesk();
+});
+
+socket.on('desk:frame', (payload) => {
+  if (!desk.live && !desk.booting) return;
+  if (!desk.live) {
+    desk.booting = false;
+    desk.live = true;
+    paintDesk();
+  }
+  queueDeskFrame(payload);
+});
+
+socket.on('desk:cursor', ({ x, y } = {}) => {
+  if (!desk.live || state?.youHost) return;
+  placeDeskCursor(Number(x) || 0, Number(y) || 0);
+});
+
+socket.on('desk:closed', () => {
+  if (desk.picking && !desk.live) return;
+  desk = emptyDesk();
+  paintDesk();
+});
 
 function captionsOn() {
   return localStorage.getItem(CINEMA_CC_KEY) === '1';
@@ -2718,13 +2869,13 @@ function renderCinema() {
     paintPoster();
     paintSoftKeys();
     syncChatInputMode();
-    paintBrowse();
+    paintDesk();
     paintAdminMenu();
     return;
   }
   patchCinemaSide();
   paintPoster();
-  paintBrowse();
+  paintDesk();
   paintAdminMenu();
 }
 

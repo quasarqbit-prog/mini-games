@@ -1807,12 +1807,21 @@ body.in-cinema #view {
   gap: 12px;
   padding: 16px;
   background: rgba(8, 6, 5, 0.96);
-  overflow: auto;
+  overflow: hidden;
 }
 .browse[hidden] { display: none !important; }
 .browse-head, .browse-search { display: flex; align-items: center; gap: 8px; }
 .browse-head b { flex: 1; font-size: 18px; }
-.browse-search input { flex: 1; height: 42px; border-radius: 12px; border: 1px solid var(--line); background: #14110e; padding: 0 12px; }
+.browse-search input, .desk-url-view {
+  flex: 1;
+  height: 42px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: #14110e;
+  color: var(--cream);
+  padding: 0 12px;
+}
+.desk-url-view { display: flex; align-items: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .browse-services {
   flex: 1;
   display: flex;
@@ -1830,27 +1839,43 @@ body.in-cinema #view {
   font-size: 22px;
   font-weight: 800;
 }
-.browse-grid {
+.desk-stage {
+  position: relative;
   flex: 1;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 10px;
-  align-content: start;
-}
-.browse-card {
-  border: 1px solid var(--line);
+  min-height: 0;
   border-radius: 12px;
-  background: #1a1511;
-  color: var(--cream);
-  text-align: left;
-  padding: 0;
   overflow: hidden;
+  background: #000;
 }
-.browse-card.on { outline: 2px solid var(--coral); }
-.browse-card img, .browse-ph { width: 100%; height: 104px; object-fit: cover; background: #000; display: block; }
-.browse-card b, .browse-card span { display: block; padding: 0 8px; }
-.browse-card b { margin-top: 8px; font-size: 13px; line-height: 1.3; }
-.browse-card span { margin: 4px 0 8px; color: var(--muted); font-size: 12px; }
+.desk-screen {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+  background: #000;
+  cursor: none;
+  outline: none;
+}
+.desk-cursor {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  border: 2px solid #111;
+  border-radius: 50%;
+  background: #fff;
+  pointer-events: none;
+  transform: translate(-20%, -20%);
+}
+.desk-wait {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  color: var(--cream);
+}
+.desk-tools { display: flex; flex-wrap: wrap; gap: 8px; }
 
 @media (hover: hover) and (pointer: fine) {
   .stage-frame:hover .stage-hud,
