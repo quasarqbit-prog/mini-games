@@ -108,6 +108,20 @@ function pushModReport() {
   }
 }
 
+function removeModReport(at) {
+  const stamp = Number(at);
+  const next = modReports.filter((item) => item.at !== stamp);
+  if (next.length === modReports.length) return;
+  modReports.splice(0, modReports.length, ...next);
+  pushModReport();
+}
+
+function clearModReports() {
+  if (!modReports.length) return;
+  modReports.splice(0, modReports.length);
+  pushModReport();
+}
+
 function modKeyState(req) {
   if (!MOD_KEY) return 'missing';
   const header = String(req.get('authorization') || '');
@@ -1816,6 +1830,16 @@ io.on('connection', (socket) => {
       return;
     }
     closeRoom(room, role === 'host' ? 'Хост закрыл комнату' : 'Друг вышел из игры');
+  });
+
+  socket.on('mod-report:delete', ({ at } = {}) => {
+    if (!isAdmin(socket.data.token)) return;
+    removeModReport(at);
+  });
+
+  socket.on('mod-report:clear', () => {
+    if (!isAdmin(socket.data.token)) return;
+    clearModReports();
   });
 
   socket.on('dm', ({ to, text } = {}) => {

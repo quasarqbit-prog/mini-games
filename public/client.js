@@ -517,10 +517,14 @@ function adminHomeHtml() {
       ${item.name && item.name !== item.ip ? `<em>${escapeHtml(item.name)}</em>` : ''}
       <span>${escapeHtml(item.message || 'Мод прислал этот IP.')}</span>
       <small>${escapeHtml(chatStamp(item.at))}</small>
+      <button type="button" class="btn ghost" data-act="mod-delete" data-at="${Number(item.at) || 0}">Удалить</button>
     </li>`).join('');
   return `
     <section class="admin-home">
-      <h2>Админ</h2>
+      <div class="admin-head">
+        <h2>Админ</h2>
+        ${rows ? '<button type="button" class="btn ghost" data-act="mod-clear">Очистить</button>' : ''}
+      </div>
       <p class="note">Сообщение от мода Minecraft</p>
       ${rows ? `<ul>${rows}</ul>` : '<p class="note">Мод ещё ничего не присылал.</p>'}
     </section>`;
@@ -1203,7 +1207,7 @@ function modReportLine() {
   const last = modReports.at(-1);
   if (!last) return '<p class="note">Мод ещё ничего не присылал.</p>';
   const name = last.name && last.name !== last.ip ? ` (${last.name})` : '';
-  return `<p>Мод: <strong>${escapeHtml(last.ip || 'без IP')}</strong>${escapeHtml(name)} ${escapeHtml(last.message || '')}</p>`;
+  return `<p>Мод: <strong>${escapeHtml(last.ip || 'без IP')}</strong>${escapeHtml(name)} ${escapeHtml(last.message || '')} <button type="button" class="btn ghost" data-act="mod-delete" data-at="${Number(last.at) || 0}">Удалить</button> <button type="button" class="btn ghost" data-act="mod-clear">Очистить</button></p>`;
 }
 
 function adminMenuHtml() {
@@ -1496,6 +1500,8 @@ document.addEventListener('click', (event) => {
     inviteOpen = false;
     paintInvite();
   }
+  if (act === 'mod-delete') socket.emit('mod-report:delete', { at: Number(el.dataset.at) });
+  if (act === 'mod-clear') socket.emit('mod-report:clear');
   if (act === 'invite-send') {
     socket.emit('dm:invite', { to: el.dataset.id });
     inviteOpen = false;
