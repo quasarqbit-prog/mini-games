@@ -71,19 +71,36 @@ function pushModReport() {
   }
 }
 
-app.post('/api/minecraft', express.json({ limit: '8kb' }), (req, res) => {
-  if (!MOD_KEY) return res.status(503).json({ ok: false, error: 'Ключ мода не настроен' });
+function modKeyState(req) {
+  if (!MOD_KEY) return 'missing';
   const header = String(req.get('authorization') || '');
-  const key = header.startsWith('Bearer ') ? header.slice(7).trim() : String(req.get('x-mod-key') || '').trim();
+  const fromHeader = header.startsWith('Bearer ') ? header.slice(7).trim() : String(req.get('x-mod-key') || '').trim();
+  const key = fromHeader || cleanModText(req.query?.key, 200);
   const given = Buffer.from(key);
   const expect = Buffer.from(MOD_KEY);
-  if (given.length !== expect.length || !crypto.timingSafeEqual(given, expect)) {
-    return res.status(401).json({ ok: false, error: 'Неверный ключ' });
+  if (given.length !== expect.length || !crypto.timingSafeEqual(given, expect)) return 'bad';
+  return 'ok';
+}
+
+function readModFields(req) {
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  return {
+    ip: cleanModText(body.ip ?? req.query?.ip, 64),
+    message: cleanModText(body.message ?? req.query?.message, 400),
+  };
+}
+
+function takeModReport(req, res) {
+  res.set('Cache-Control', 'no-store');
+  const { ip, message } = readModFields(req);
+  if (!ip && !message && req.method === 'GET') {
+    return res.json({ ok: true, key: Boolean(MOD_KEY) });
   }
-  const ip = cleanModText(req.body?.ip, 64);
-  const message = cleanModText(req.body?.message, 400);
+  const keyState = modKeyState(req);
+  if (keyState === 'missing') return res.status(503).json({ ok: false, error: 'Ключ мода не настроен' });
+  if (keyState === 'bad') return res.status(401).json({ ok: false, error: 'Неверный ключ' });
   if (!ip && !message) return res.status(400).json({ ok: false, error: 'Нужен ip или message' });
-  if (ip && !/^[0-9a-fA-F:.[\]]{2,64}$/.test(ip)) return res.status(400).json({ ok: false, error: 'Не похоже на IP' });
+  if (ip && !/^[A-Za-z0-9.:[\]_-]{2,64}$/.test(ip)) return res.status(400).json({ ok: false, error: 'Не похоже на IP' });
   const now = Date.now();
   if (now - modReportAt < 1000) return res.status(429).json({ ok: false, error: 'Слишком часто' });
   modReportAt = now;
@@ -91,6 +108,26 @@ app.post('/api/minecraft', express.json({ limit: '8kb' }), (req, res) => {
   if (modReports.length > 12) modReports.splice(0, modReports.length - 12);
   pushModReport();
   res.json({ ok: true });
+}
+
+function modIngress(req, res, next) {
+  const type = String(req.get('content-type') || '');
+  const parser = type.includes('application/x-www-form-urlencoded')
+    ? express.urlencoded({ extended: false, limit: '8kb' })
+    : express.json({ limit: '8kb' });
+  parser(req, res, (err) => {
+    if (err) return res.status(400).json({ ok: false, error: 'Плохое тело' });
+    next();
+  });
+}
+
+app.use('/api/minecraft', (req, res, next) => {
+  if (req.path !== '/' && req.path !== '') return next();
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    res.set('Allow', 'GET, POST');
+    return res.status(405).json({ ok: false, error: 'Нужен GET или POST' });
+  }
+  modIngress(req, res, () => takeModReport(req, res));
 });
 
 const rooms = new Map();

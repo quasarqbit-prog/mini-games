@@ -444,6 +444,9 @@ async function main() {
   reader.close();
 
   const modUrl = `http://127.0.0.1:${port}/api/minecraft`;
+  const opened = await fetch(modUrl);
+  const openedBody = await opened.json();
+  assert(opened.status === 200 && openedBody.ok === true && openedBody.key === true, `mod api opens in the browser: ${opened.status}`);
   const locked = await fetch(modUrl, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -462,6 +465,9 @@ async function main() {
     body: JSON.stringify({ ip: 'not an ip', message: 'мимо' }),
   });
   assert(junk.status === 400, `mod api rejects a bad ip: ${junk.status}`);
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+  const viaQuery = await fetch(`${modUrl}?key=${encodeURIComponent('smoke-mod-key')}&ip=198.51.100.8&message=${encodeURIComponent('из игры')}`);
+  assert(viaQuery.status === 200, `mod api accepts a browser-style link: ${viaQuery.status}`);
 
   console.log('smoke ok', created.code);
 
