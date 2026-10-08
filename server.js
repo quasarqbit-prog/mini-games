@@ -6,6 +6,7 @@ const dns = require('dns').promises;
 const net = require('net');
 const { Readable } = require('stream');
 const { Server } = require('socket.io');
+const mono = require('./monopoly');
 
 const PORT = Number(process.env.PORT) || 3000;
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -198,6 +199,9 @@ function roleOf(room, token) {
   if (room.game === 'cinema') {
     return room.members?.some((member) => member.token === token) ? 'member' : null;
   }
+  if (room.game === 'mono') {
+    return room.players?.some((player) => player.token === token) ? 'player' : null;
+  }
   if (room.host?.token === token) return 'host';
   if (room.guest?.token === token) return 'guest';
   return null;
@@ -222,7 +226,18 @@ function pushChat(room, from, text, extra = {}) {
     image: extra.image || '',
     sticker: extra.sticker || '',
   };
-  if (room.game === 'cinema') {
+  if (room.game === 'mono') {
+    const system = from === 'system';
+    const player = system ? null : room.players.find((item) => item.token === from);
+    room.chat.push({
+      id: room.chatSeq,
+      system,
+      token: system ? '' : from,
+      name: system ? '' : (player?.name || 'Игрок'),
+      at: Date.now(),
+      ...attachment,
+    });
+  } else if (room.game === 'cinema') {
     const system = from === 'system';
     const member = system ? null : room.members.find((item) => item.token === from);
     room.chat.push({
@@ -371,6 +386,7 @@ function broadcastOnline() {
 
 function publicView(room, token) {
   if (room.game === 'cinema') return cinemaView(room, token);
+  if (room.game === 'mono') return mono.view(room, token);
   if (room.game === 'battle') return battleView(room, token);
   const you = roleOf(room, token);
   const player = (slot) => (slot ? {
@@ -433,6 +449,7 @@ function fail(socket, text, extra) {
 
 function attach(socket, room) {
   if (room.game === 'cinema') return attachCinema(socket, room);
+  if (room.game === 'mono') return attachMono(socket, room);
   const role = roleOf(room, socket.data.token);
   if (!role) return;
   room[role].socketId = socket.id;
@@ -1016,6 +1033,77 @@ function cinemaChat(socket, room, raw) {
   broadcast(room);
 }
 
+function monoPlayer(room, token) {
+  return room.players?.find((player) => player.token === token) || null;
+}
+
+function attachMono(socket, room) {
+  const player = monoPlayer(room, socket.data.token);
+  if (!player) return;
+  player.socketId = socket.id;
+  player.connected = true;
+  player.disconnectedAt = 0;
+  applyProfile(player);
+  socket.join(room.code);
+  broadcast(room);
+}
+
+function createMono(socket) {
+  const already = findByToken(socket.data.token);
+  if (already) return attach(socket, already);
+  if (rooms.size > 500) return fail(socket, 'Слишком много комнат, попробуй позже');
+  const room = mono.emptyMono(makeCode());
+  mono.addPlayer(room, socket.data.token, socket.id);
+  applyProfile(room.players[0]);
+  rooms.set(room.code, room);
+  socket.join(room.code);
+  pushChat(room, 'system', 'Монополия открыта. Можно от 2 до 6 игроков.');
+  broadcast(room);
+}
+
+function joinMono(socket, room) {
+  if (monoPlayer(room, socket.data.token)) return attachMono(socket, room);
+  const elsewhere = findByToken(socket.data.token);
+  if (elsewhere && elsewhere.code !== room.code) return fail(socket, 'Ты уже в другой комнате. Сначала выйди из неё.');
+  if (room.phase !== 'lobby') return fail(socket, 'Партия уже началась');
+  const problem = mono.addPlayer(room, socket.data.token, socket.id);
+  if (problem) return fail(socket, problem);
+  const player = room.players[room.players.length - 1];
+  applyProfile(player);
+  socket.join(room.code);
+  pushChat(room, 'system', `${player.name || 'Игрок'} сел за стол.`);
+  broadcast(room);
+}
+
+function leaveMono(socket, room) {
+  const player = monoPlayer(room, socket.data.token);
+  if (!player) {
+    socket.emit('closed', { message: 'Ты вышел' });
+    return;
+  }
+  socket.leave(room.code);
+  socket.emit('closed', { message: 'Ты вышел из монополии' });
+  if (room.phase === 'lobby') {
+    room.players = room.players.filter((item) => item.id !== player.id);
+    if (!room.players.length) {
+      rooms.delete(room.code);
+      return;
+    }
+    room.players.forEach((item, index) => { item.host = index === 0; });
+    pushChat(room, 'system', `${player.name || 'Игрок'} вышел.`);
+    broadcast(room);
+    return;
+  }
+  player.connected = false;
+  mono.act(room, player, { act: 'bankrupt', force: 1 });
+  if (!room.players.some((item) => item.connected && !item.bankrupt)) {
+    rooms.delete(room.code);
+    return;
+  }
+  pushChat(room, 'system', `${player.name || 'Игрок'} вышел из партии.`);
+  broadcast(room);
+}
+
 function requireCinema(socket) {
   const room = findByToken(socket.data.token);
   if (!room || room.game !== 'cinema') return null;
@@ -1039,6 +1127,7 @@ io.on('connection', (socket) => {
 
   socket.on('create', ({ game } = {}) => {
     if (game === 'cinema') return createCinema(socket);
+    if (game === 'mono') return createMono(socket);
     if (game === 'battle') return createBattle(socket);
     if (game !== 'wordle') return fail(socket, 'Такой игры пока нет');
     const already = findByToken(socket.data.token);
@@ -1061,6 +1150,7 @@ io.on('connection', (socket) => {
     const room = rooms.get(normalized);
     if (!room) return fail(socket, 'Комната не найдена');
     if (room.game === 'cinema') return joinCinema(socket, room);
+    if (room.game === 'mono') return joinMono(socket, room);
 
     const already = roleOf(room, socket.data.token);
     if (already) {
@@ -1086,6 +1176,15 @@ io.on('connection', (socket) => {
     const room = findByToken(socket.data.token);
     if (!room) return fail(socket, 'Комната не найдена');
     if (room.game === 'cinema') return;
+    if (room.game === 'mono') {
+      if (!monoPlayer(room, socket.data.token)?.host) return fail(socket, 'Начать игру может только хост');
+      if (room.phase !== 'lobby') return fail(socket, 'Игра уже началась');
+      const problem = mono.start(room);
+      if (problem) return fail(socket, problem);
+      pushChat(room, 'system', 'Партия монополии началась.');
+      broadcast(room);
+      return;
+    }
     if (roleOf(room, socket.data.token) !== 'host') return fail(socket, 'Начать игру может только хост');
     if (room.phase !== 'lobby') return fail(socket, 'Игра уже началась');
     if (!room.guest?.connected) return fail(socket, 'Сначала пусть друг введёт код комнаты');
@@ -1165,6 +1264,13 @@ io.on('connection', (socket) => {
     const room = findByToken(socket.data.token);
     if (!room) return fail(socket, 'Комната не найдена');
     if (room.game === 'cinema') return;
+    if (room.game === 'mono') {
+      if (!monoPlayer(room, socket.data.token)?.host) return fail(socket, 'Настройки меняет хост');
+      if (room.phase !== 'lobby') return fail(socket, 'Настройки можно менять только в лобби');
+      room.settings = { firstTurn: raw?.firstTurn === 'random' ? 'random' : 'host' };
+      broadcast(room);
+      return;
+    }
     if (roleOf(room, socket.data.token) !== 'host') return fail(socket, 'Настройки меняет хост');
     if (room.phase !== 'lobby') return fail(socket, 'Настройки можно менять только в лобби');
     if (room.game === 'battle') {
@@ -1213,6 +1319,14 @@ io.on('connection', (socket) => {
       broadcast(room);
       return;
     }
+    if (room.game === 'mono') {
+      const player = monoPlayer(room, socket.data.token);
+      if (!player) return;
+      player.name = clean;
+      player.avatar = picture;
+      broadcast(room);
+      return;
+    }
     const role = roleOf(room, socket.data.token);
     room[role].name = clean;
     room[role].avatar = picture;
@@ -1223,6 +1337,18 @@ io.on('connection', (socket) => {
     const room = findByToken(socket.data.token);
     if (!room) return fail(socket, 'Комната не найдена');
     if (room.game === 'cinema') return cinemaChat(socket, room, raw);
+    if (room.game === 'mono') {
+      const player = monoPlayer(room, socket.data.token);
+      if (!player) return;
+      const payload = chatPayload(raw);
+      if (payload.badImage) return fail(socket, 'Фото слишком большое или не подходит');
+      if (payload.badSticker) return fail(socket, 'Стикер слишком большой или не подходит');
+      if (!payload.text && !payload.image && !payload.sticker) return;
+      if (!allowChat(room, player.token, socket)) return;
+      pushChat(room, player.token, payload.text, payload);
+      broadcast(room);
+      return;
+    }
     const role = roleOf(room, socket.data.token);
     const payload = chatPayload(raw);
     if (payload.badImage) return fail(socket, 'Фото слишком большое или не подходит');
@@ -1495,6 +1621,15 @@ io.on('connection', (socket) => {
     broadcast(room);
   });
 
+  socket.on('mono', (payload = {}) => {
+    const room = findByToken(socket.data.token);
+    if (!room || room.game !== 'mono') return;
+    const player = monoPlayer(room, socket.data.token);
+    const problem = mono.act(room, player, payload);
+    if (problem) return fail(socket, problem);
+    broadcast(room);
+  });
+
   socket.on('leave', () => {
     const room = findByToken(socket.data.token);
     if (!room) {
@@ -1502,6 +1637,7 @@ io.on('connection', (socket) => {
       return;
     }
     if (room.game === 'cinema') return leaveCinema(socket, room);
+    if (room.game === 'mono') return leaveMono(socket, room);
     const role = roleOf(room, socket.data.token);
     if (role === 'guest' && room.phase === 'lobby') {
       room.guest = null;
@@ -1520,6 +1656,14 @@ io.on('connection', (socket) => {
     const room = findByToken(socket.data.token);
     if (!room) return;
     if (room.game === 'cinema') return disconnectCinema(socket, room);
+    if (room.game === 'mono') {
+      const player = monoPlayer(room, socket.data.token);
+      if (!player || player.socketId !== socket.id) return;
+      player.connected = false;
+      player.disconnectedAt = Date.now();
+      broadcast(room);
+      return;
+    }
     const role = roleOf(room, socket.data.token);
     if (!role || room[role].socketId !== socket.id) return;
     room[role].connected = false;
@@ -1550,6 +1694,10 @@ setInterval(() => {
           broadcast(room);
         }
       }
+      continue;
+    }
+    if (room.game === 'mono') {
+      if (mono.tick(room, now)) broadcast(room);
       continue;
     }
     if (room.game === 'battle') {
@@ -1590,6 +1738,17 @@ setInterval(() => {
       if (!room.members.length || (!alive && stale)) {
         closeDesk(room.code);
         rooms.delete(room.code);
+      }
+      continue;
+    }
+    if (room.game === 'mono') {
+      if (room.phase === 'lobby') {
+        room.players = room.players.filter((player) => player.connected || now - (player.disconnectedAt || now) < 10 * 60 * 1000);
+        room.players.forEach((player, index) => { player.host = index === 0; });
+        if (!room.players.length) rooms.delete(room.code);
+      } else if (!room.players.some((player) => player.connected)) {
+        const stale = room.players.every((player) => now - (player.disconnectedAt || now) > 10 * 60 * 1000);
+        if (stale) rooms.delete(room.code);
       }
       continue;
     }

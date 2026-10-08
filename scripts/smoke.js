@@ -383,6 +383,46 @@ async function main() {
   battleHost.close();
   battleGuest.close();
 
+  const monoHost = connect('mono-host');
+  const monoGuest = connect('mono-guest');
+  const monoThird = connect('mono-third');
+  await Promise.all([monoHost, monoGuest, monoThird].map((socket) => new Promise((resolve) => socket.on('connect', resolve))));
+  monoHost.emit('create', { game: 'mono' });
+  const table = await monoHost.when((s) => s.game === 'mono' && s.phase === 'lobby' && s.host, 'mono lobby');
+  monoGuest.emit('join', { code: table.code });
+  await monoGuest.when((s) => s.players.length === 2 && !s.host, 'mono guest');
+  monoThird.emit('join', { code: table.code });
+  await monoHost.when((s) => s.players.length === 3, 'third player');
+  const deniedStart = new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(''), 800);
+    monoGuest.once('errorMsg', (payload) => {
+      clearTimeout(timer);
+      resolve(typeof payload === 'string' ? payload : payload.text);
+    });
+  });
+  monoGuest.emit('start');
+  assert(/хост/.test(await deniedStart), 'guest cannot start monopoly');
+  monoHost.emit('start');
+  const dealt = await monoGuest.when((s) => s.phase === 'play' && s.players.every((player) => player.cash === 1500), 'mono deal');
+  assert(dealt.tiles.length === 40, 'forty squares');
+  assert(dealt.players.find((player) => player.host).id === dealt.turn, 'host starts');
+  monoHost.emit('mono', { act: 'roll' });
+  const rolled = await monoGuest.when((s) => s.dice && s.diceId > 0, 'dice');
+  assert(rolled.dice[0] >= 1 && rolled.dice[0] <= 6 && rolled.dice[1] >= 1 && rolled.dice[1] <= 6, 'two dice');
+  const blockedRoll = new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(''), 800);
+    monoGuest.once('errorMsg', (payload) => {
+      clearTimeout(timer);
+      resolve(typeof payload === 'string' ? payload : payload.text);
+    });
+  });
+  monoGuest.emit('mono', { act: 'roll' });
+  const blockedText = await blockedRoll;
+  assert(/ход|бросок/.test(blockedText), `guest roll blocked: ${blockedText}`);
+  monoHost.close();
+  monoGuest.close();
+  monoThird.close();
+
   console.log('smoke ok', created.code);
 
 function theatreWaitId(snapshot) {

@@ -368,7 +368,7 @@ function messageName(msg) {
 }
 
 function messageMine(msg) {
-  if (state?.game === 'cinema') return Boolean(msg.mine);
+  if (state?.game === 'cinema' || state?.game === 'mono') return Boolean(msg.mine);
   return msg.from === state?.you;
 }
 
@@ -395,7 +395,7 @@ function messageBody(msg) {
 function messageHtml(msg) {
   if (isSystemMessage(msg)) return `<div class="msg system">${escapeHtml(msg.text)}</div>`;
   const who = messageName(msg);
-  const cinema = state?.game === 'cinema';
+  const cinema = state?.game === 'cinema' || state?.game === 'mono';
   const head = cinema
     ? `${escapeHtml(who)} · ${chatStamp(msg.at)}`
     : `${avatarHtml(state?.[msg.from] || { name: who }, who)}${escapeHtml(who)}`;
@@ -460,7 +460,7 @@ function homeHtml() {
   }
   return `
     <section class="home">
-      <p class="lead">Открой Wordle, морской бой или кинотеатр и скинь ссылку другу. Он попадёт в ту же комнату.</p>
+      <p class="lead">Открой Wordle, морской бой, кинотеатр или монополию и скинь ссылку другу. Он попадёт в ту же комнату.</p>
       <form class="join" data-act="join">
         <label for="room-code">Код комнаты</label>
         <input id="room-code" maxlength="8" autocomplete="off" placeholder="ABCDE" ${connected ? '' : 'disabled'}>
@@ -485,6 +485,12 @@ function homeHtml() {
           <h2>Кинотеатр</h2>
           <p>Смотрите вместе: YouTube, Twitch, Google Drive и Dropbox.</p>
           <span class="tag">вместе</span>
+        </button>
+        <button class="game-card" type="button" data-act="create" data-game="mono" ${connected ? '' : 'disabled'}>
+          <div class="mono-preview" aria-hidden="true"><i></i><i></i><i></i><i></i><b></b><i></i><i></i><i></i><i></i></div>
+          <h2>Монополия</h2>
+          <p>Покупайте улицы, стройте дома и торгуйтесь. Кто останется при деньгах — победил.</p>
+          <span class="tag">2–6 игроков</span>
         </button>
       </div>
       ${onlineHtml()}
@@ -1152,9 +1158,25 @@ function paintAdminMenu() {
 
 function render() {
   if (state?.game === 'cinema') {
+    document.body.classList.remove('in-mono');
     renderCinema();
     return;
   }
+  if (state?.game === 'mono') {
+    desk = emptyDesk();
+    document.body.classList.remove('in-cinema');
+    document.body.classList.add('in-mono');
+    document.body.classList.toggle('in-game', state.phase !== 'lobby');
+    captureForm();
+    renderHeader();
+    view.innerHTML = window.MonopolyUI.page(state);
+    restoreForm();
+    window.MonopolyUI.mount();
+    paintPicker();
+    paintAdminMenu();
+    return;
+  }
+  document.body.classList.remove('in-mono');
   desk = emptyDesk();
   captureForm();
   document.body.classList.remove('in-cinema');
@@ -1269,6 +1291,41 @@ document.addEventListener('click', (event) => {
   }
   if (act === 'create') {
     socket.emit('create', { game: el.dataset.game });
+    return;
+  }
+  if (act === 'mono') {
+    socket.emit('mono', {
+      act: el.dataset.op,
+      tile: el.dataset.tile,
+      amount: el.dataset.amount || document.querySelector('.mono-bid')?.value,
+      to: el.dataset.to,
+    });
+    return;
+  }
+  if (act === 'mono-tab') {
+    window.MonopolyUI.setTab(el.dataset.tab);
+    render();
+    return;
+  }
+  if (act === 'mono-focus') {
+    window.MonopolyUI.focus(el.dataset.id);
+    render();
+    return;
+  }
+  if (act === 'mono-trade') {
+    const root = document.querySelector('.mono-trade');
+    if (!root) return;
+    const picked = (name) => [...root.querySelectorAll(name)].filter((box) => box.checked).map((box) => box.value).join(',');
+    socket.emit('mono', {
+      act: 'trade',
+      to: root.querySelector('.trade-to')?.value || '',
+      giveCash: root.querySelector('.give-cash')?.value || 0,
+      takeCash: root.querySelector('.take-cash')?.value || 0,
+      giveTiles: picked('.give-tile'),
+      takeTiles: picked('.take-tile'),
+      giveCard: root.querySelector('.give-card')?.checked ? '1' : '',
+      takeCard: root.querySelector('.take-card')?.checked ? '1' : '',
+    });
     return;
   }
   if (act === 'copy' && state) {
@@ -1583,7 +1640,15 @@ document.addEventListener('keydown', (event) => {
     }
     return;
   }
-  if (!state || state.phase !== 'play' || state.game === 'battle') return;
+  if (event.key === ' ' && state?.game === 'mono' && state.phase === 'play') {
+    const tag = document.activeElement?.tagName;
+    if (tag !== 'INPUT' && tag !== 'TEXTAREA') {
+      event.preventDefault();
+      socket.emit('mono', { act: 'roll' });
+    }
+    return;
+  }
+  if (!state || state.phase !== 'play' || state.game === 'battle' || state.game === 'mono' || state.game === 'cinema') return;
   const tag = document.activeElement?.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA') return;
   if (event.key === 'Enter') {
@@ -1711,6 +1776,19 @@ function endShipDrag(event) {
 socket.on('state', (next) => {
   if (next?.game === 'cinema') {
     handleCinemaState(next);
+    return;
+  }
+  if (next?.game === 'mono') {
+    const prev = state?.game === 'mono' ? state : null;
+    booting = false;
+    if (prev && prev.code === next.code) {
+      const prevLast = prev.chat.at(-1)?.id || 0;
+      const fresh = next.chat.filter((msg) => msg.id > prevLast && !msg.system && !msg.mine);
+      if (fresh.length) playChatSound();
+    }
+    if (inviteCode && next.code === inviteCode) inviteCode = '';
+    state = next;
+    render();
     return;
   }
   if (next?.game === 'battle') {
