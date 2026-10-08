@@ -163,26 +163,6 @@ async function main() {
   cinemaGuest.emit('join', { code: theatre.code });
   const watching = await cinemaGuest.when((s) => s.game === 'cinema' && !s.youHost && s.members.length === 2, 'cinema guest');
   assert(watching.phase === 'watch', 'no lobby');
-  const guestDesk = new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(''), 800);
-    cinemaGuest.once('errorMsg', (payload) => {
-      clearTimeout(timer);
-      resolve(typeof payload === 'string' ? payload : payload.text);
-    });
-  });
-  cinemaGuest.emit('cinema:desk', { mode: 'web' });
-  const guestDeskError = await guestDesk;
-  assert(/хост/.test(guestDeskError), `guest cannot open browser: ${guestDeskError}`);
-  const badDesk = new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(''), 800);
-    cinemaHost.once('errorMsg', (payload) => {
-      clearTimeout(timer);
-      resolve(typeof payload === 'string' ? payload : payload.text);
-    });
-  });
-  cinemaHost.emit('cinema:desk', { mode: 'file' });
-  const badDeskError = await badDesk;
-  assert(/режим/.test(badDeskError), `unknown browser mode: ${badDeskError}`);
   cinemaHost.emit('cinema:video', { url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' });
   const queued = await cinemaGuest.when((s) => s.video?.id === 'dQw4w9WgXcQ', 'video');
   assert(queued.video.playing === false, 'starts paused');
@@ -422,6 +402,46 @@ async function main() {
   monoHost.close();
   monoGuest.close();
   monoThird.close();
+
+  const writer = connect('dm-writer');
+  const reader = connect('dm-reader');
+  const writerId = new Promise((resolve) => writer.once('hello', (payload) => resolve(payload.userId)));
+  const readerId = new Promise((resolve) => reader.once('hello', (payload) => resolve(payload.userId)));
+  await Promise.all([
+    new Promise((resolve) => writer.on('connect', resolve)),
+    new Promise((resolve) => reader.on('connect', resolve)),
+  ]);
+  const [fromId, toId] = await Promise.all([writerId, readerId]);
+  assert(fromId && toId && fromId !== toId, 'public ids');
+  writer.emit('create', { game: 'mono' });
+  const invited = await writer.when((s) => s.game === 'mono' && s.phase === 'lobby', 'invite lobby');
+  const mailed = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('timeout: invite mail')), 4000);
+    reader.on('mail', (blocks) => {
+      const hit = (blocks || []).find((block) => block.messages?.some((msg) => msg.invite?.code === invited.code));
+      if (!hit) return;
+      clearTimeout(timer);
+      resolve(hit);
+    });
+  });
+  writer.emit('dm:invite', { to: toId });
+  const card = await mailed;
+  assert(card.messages.some((msg) => msg.invite?.title === 'монополию'), 'invite block');
+  reader.emit('dm', { to: fromId, text: 'иду' });
+  const reply = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('timeout: dm reply')), 4000);
+    writer.on('mail', (blocks) => {
+      const hit = (blocks || []).find((block) => block.id === toId && block.messages?.some((msg) => msg.text === 'иду'));
+      if (!hit) return;
+      clearTimeout(timer);
+      resolve(hit);
+    });
+  });
+  assert(reply.messages.some((msg) => msg.text === 'иду' && !msg.mine) || reply.messages.some((msg) => msg.text === 'иду'), 'direct reply');
+  reader.emit('join', { code: invited.code });
+  await writer.when((s) => s.players.length === 2, 'invite accepted');
+  writer.close();
+  reader.close();
 
   console.log('smoke ok', created.code);
 

@@ -98,6 +98,7 @@ window.MonopolyUI = (() => {
           ${self?.host
             ? `<button class="btn" type="button" data-act="start" ${ready >= 2 ? '' : 'disabled'}>Начать партию</button>`
             : '<button class="btn" type="button" disabled>Ждём, пока хост начнёт</button>'}
+          <button class="btn ghost" type="button" data-act="invite-open">Пригласить в чат</button>
           <button class="btn ghost" type="button" data-act="leave">Выйти</button>
         </div>
         ${chat(state)}

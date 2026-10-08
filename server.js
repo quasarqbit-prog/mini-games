@@ -2,8 +2,6 @@ const express = require('express');
 const http = require('http');
 const path = require('path');
 const crypto = require('crypto');
-const dns = require('dns').promises;
-const net = require('net');
 const { Readable } = require('stream');
 const { Server } = require('socket.io');
 const mono = require('./monopoly');
@@ -381,7 +379,141 @@ function onlinePayload(forToken) {
 function broadcastOnline() {
   for (const socket of io.sockets.sockets.values()) {
     socket.emit('online', onlinePayload(socket.data.token));
+    socket.emit('mail', mailFor(socket.data.token));
   }
+}
+
+const directThreads = new Map();
+const directTimes = new Map();
+const GAME_TITLE = {
+  wordle: 'Wordle',
+  battle: 'морской бой',
+  cinema: 'кинотеатр',
+  mono: 'монополию',
+};
+
+function pairKey(left, right) {
+  return [left, right].sort().join('|');
+}
+
+function directThread(left, right) {
+  const key = pairKey(left, right);
+  let thread = directThreads.get(key);
+  if (!thread) {
+    thread = { key, seq: 1, messages: [], read: new Map() };
+    directThreads.set(key, thread);
+  }
+  return thread;
+}
+
+function personByPublicId(id) {
+  for (const [token, entry] of presence) {
+    if (publicId(token) !== id) continue;
+    return { name: entry.name || '', avatar: entry.avatar || '', online: entry.sockets.size > 0 };
+  }
+  for (const [token, saved] of profiles) {
+    if (publicId(token) === id) return { name: saved.name || '', avatar: saved.avatar || '', online: false };
+  }
+  return { name: '', avatar: '', online: false };
+}
+
+function knownPublicId(id) {
+  const clean = String(id || '');
+  if (!/^(?:[A-Z0-9]{4}-[A-Z0-9]{4}|ADMIN)$/.test(clean)) return false;
+  for (const token of presence.keys()) if (publicId(token) === clean) return true;
+  for (const token of profiles.keys()) if (publicId(token) === clean) return true;
+  for (const thread of directThreads.values()) {
+    if (thread.key.split('|').includes(clean)) return true;
+  }
+  return false;
+}
+
+function allowDirect(token, socket) {
+  const now = Date.now();
+  const recent = (directTimes.get(token) || []).filter((stamp) => now - stamp < 10000);
+  if (recent.length >= 8) {
+    fail(socket, 'Слишком много сообщений. Подожди немного.');
+    return false;
+  }
+  if (recent.length && now - recent[recent.length - 1] < 400) {
+    fail(socket, 'Подожди секунду перед следующим сообщением.');
+    return false;
+  }
+  recent.push(now);
+  directTimes.set(token, recent);
+  return true;
+}
+
+function mailFor(token) {
+  const me = publicId(token);
+  const people = new Map();
+  for (const [otherToken, entry] of presence) {
+    if (otherToken === token || !entry.sockets.size) continue;
+    const id = publicId(otherToken);
+    people.set(id, {
+      id,
+      name: entry.name || '',
+      avatar: entry.avatar || '',
+      online: true,
+      messages: [],
+      unread: 0,
+    });
+  }
+  for (const thread of directThreads.values()) {
+    const ids = thread.key.split('|');
+    if (!ids.includes(me)) continue;
+    const otherId = ids[0] === me ? ids[1] : ids[0];
+    if (!people.has(otherId)) {
+      const person = personByPublicId(otherId);
+      people.set(otherId, { id: otherId, ...person, messages: [], unread: 0 });
+    }
+    const seen = thread.read.get(me) || 0;
+    const block = people.get(otherId);
+    block.messages = thread.messages.slice(-40).map((message) => ({
+      id: message.id,
+      mine: message.from === me,
+      text: message.text,
+      at: message.at,
+      invite: message.invite,
+    }));
+    block.unread = thread.messages.filter((message) => message.id > seen && message.from !== me).length;
+  }
+  return [...people.values()].sort((a, b) => {
+    const aAt = a.messages.at(-1)?.at || 0;
+    const bAt = b.messages.at(-1)?.at || 0;
+    return Number(b.unread > 0) - Number(a.unread > 0) || bAt - aAt || Number(b.online) - Number(a.online) || a.name.localeCompare(b.name, 'ru');
+  });
+}
+
+function postDirect(socket, toId, text, invite) {
+  const me = publicId(socket.data.token);
+  const other = String(toId || '');
+  if (other === me) return fail(socket, 'Себе писать некуда');
+  if (!knownPublicId(other)) return fail(socket, 'Пользователь не найден');
+  const clean = cleanText(text);
+  if (!clean && !invite) return;
+  if (!allowDirect(socket.data.token, socket)) return;
+  const thread = directThread(me, other);
+  thread.messages.push({
+    id: thread.seq,
+    from: me,
+    text: clean,
+    at: Date.now(),
+    invite: invite || null,
+  });
+  thread.seq += 1;
+  thread.read.set(me, thread.seq - 1);
+  if (thread.messages.length > 80) thread.messages.splice(0, thread.messages.length - 80);
+  broadcastOnline();
+  return true;
+}
+
+function canInvite(room) {
+  if (!room) return false;
+  if (room.game === 'cinema') return true;
+  if (room.phase !== 'lobby') return false;
+  if (room.game === 'mono') return room.players.filter((player) => player.connected).length < 6;
+  return !room.guest;
 }
 
 function publicView(room, token) {
@@ -460,7 +592,6 @@ function attach(socket, room) {
 }
 
 function closeRoom(room, message) {
-  closeDesk(room.code);
   io.to(room.code).emit('closed', { message });
   rooms.delete(room.code);
 }
@@ -925,7 +1056,6 @@ function attachCinema(socket, room) {
   applyProfile(member);
   socket.join(room.code);
   broadcast(room);
-  sendDesk(socket, room);
 }
 
 function createCinema(socket) {
@@ -983,7 +1113,6 @@ function joinCinema(socket, room) {
   socket.join(room.code);
   pushChat(room, 'system', `${cinemaName(member)} вошёл в кинотеатр.`);
   broadcast(room);
-  sendDesk(socket, room);
 }
 
 function leaveCinema(socket, room) {
@@ -999,8 +1128,7 @@ function leaveCinema(socket, room) {
   socket.emit('closed', { message: 'Ты вышел из кинотеатра' });
   const next = connectedCinema(room)[0];
   if (!next) {
-    closeDesk(room.code);
-    rooms.delete(room.code);
+      rooms.delete(room.code);
     return;
   }
   if (wasHost) {
@@ -1448,101 +1576,6 @@ io.on('connection', (socket) => {
     playParsed(room, member, parsed);
   });
 
-  socket.on('cinema:desk', ({ mode } = {}) => {
-    const found = requireCinema(socket);
-    if (!found) return fail(socket, 'Комната не найдена');
-    const { room, member } = found;
-    if (!member.host && !isAdmin(socket.data.token)) return fail(socket, 'Браузер открывает хост');
-    const kind = mode === 'twitch' || mode === 'web' || mode === 'youtube' ? mode : '';
-    if (!kind) return fail(socket, 'Неизвестный режим');
-    openDesk(room, member, kind).catch(() => fail(socket, 'Браузер на сервере не запустился'));
-  });
-
-  socket.on('cinema:desk-close', () => {
-    const found = requireCinema(socket);
-    if (!found) return;
-    const { room, member } = found;
-    if (!member.host && !isAdmin(socket.data.token)) return;
-    closeDesk(room.code);
-  });
-
-  socket.on('cinema:desk-take', () => {
-    const found = requireCinema(socket);
-    if (!found) return;
-    const { room, member } = found;
-    if (!member.host && !isAdmin(socket.data.token)) return fail(socket, 'Браузер открывает хост');
-    const desk = desks.get(room.code);
-    if (!desk || desk.mode === 'web') return;
-    const parsed = parseWatchUrl(desk.page.url());
-    const fits = parsed && ((desk.mode === 'youtube' && parsed.service === 'youtube') || (desk.mode === 'twitch' && parsed.service === 'twitch'));
-    if (!fits) return fail(socket, 'Открой ролик или трансляцию');
-    desk.picked = `${parsed.service}:${parsed.id}`;
-    playParsed(room, member, parsed);
-  });
-
-  socket.on('cinema:desk-nav', ({ act, url } = {}) => {
-    const found = requireCinema(socket);
-    if (!found) return;
-    const { room, member } = found;
-    if (!member.host && !isAdmin(socket.data.token)) return;
-    const desk = desks.get(room.code);
-    if (!desk || desk.closed) return;
-    enqueueDesk(desk, async () => {
-      if (act === 'back') await desk.page.goBack({ timeout: 8000 }).catch(() => {});
-      else if (act === 'forward') await desk.page.goForward({ timeout: 8000 }).catch(() => {});
-      else if (act === 'reload') await desk.page.reload({ timeout: 15000, waitUntil: 'domcontentloaded' }).catch(() => {});
-      else if (act === 'go') {
-        let href = String(url || '').trim();
-        if (href && !/^https?:\/\//i.test(href)) href = `https://${href}`;
-        if (!(await requestAllowed(href)) || !mainAllowed(desk.mode, href)) {
-          fail(socket, 'Эта страница недоступна');
-          return;
-        }
-        desk.armed = desk.mode !== 'web';
-        await desk.page.goto(href, { timeout: 20000, waitUntil: 'domcontentloaded' }).catch(() => {});
-      }
-    });
-  });
-
-  socket.on('cinema:desk-input', (payload = {}) => {
-    const found = requireCinema(socket);
-    if (!found) return;
-    const { room, member } = found;
-    if (!member.host && !isAdmin(socket.data.token)) return;
-    const desk = desks.get(room.code);
-    if (!desk || desk.closed) return;
-    const now = Date.now();
-    if (now - desk.inputAt < 16 && payload.type === 'move') return;
-    desk.inputAt = now;
-    const x = Math.min(1, Math.max(0, Number(payload.x) || 0)) * DESK_W;
-    const y = Math.min(1, Math.max(0, Number(payload.y) || 0)) * DESK_H;
-    if (payload.type === 'move' || payload.type === 'down') {
-      io.to(room.code).emit('desk:cursor', { x: x / DESK_W, y: y / DESK_H });
-    }
-    enqueueDesk(desk, async () => {
-      if (desk.closed) return;
-      if (payload.type === 'move') await desk.page.mouse.move(x, y);
-      else if (payload.type === 'down') {
-        desk.armed = true;
-        await desk.page.mouse.move(x, y);
-        await desk.page.mouse.down();
-      } else if (payload.type === 'up') await desk.page.mouse.up();
-      else if (payload.type === 'wheel') {
-        const dx = Math.min(400, Math.max(-400, Number(payload.deltaX) || 0));
-        const dy = Math.min(400, Math.max(-400, Number(payload.deltaY) || 0));
-        await desk.page.mouse.wheel(dx, dy);
-      } else if (payload.type === 'type') {
-        desk.armed = true;
-        const text = String(payload.text || '').slice(0, 1);
-        if (text) await desk.page.keyboard.type(text);
-      } else if (payload.type === 'key') {
-        desk.armed = true;
-        const key = DESK_KEYS[payload.key];
-        if (key) await desk.page.keyboard.press(key);
-      }
-    });
-  });
-
   socket.on('cinema:pause', ({ time } = {}) => {
     const found = requireCinema(socket);
     if (!found) return;
@@ -1650,6 +1683,35 @@ io.on('connection', (socket) => {
     closeRoom(room, role === 'host' ? 'Хост закрыл комнату' : 'Друг вышел из игры');
   });
 
+  socket.on('dm', ({ to, text } = {}) => {
+    postDirect(socket, to, text);
+  });
+
+  socket.on('dm:read', ({ to } = {}) => {
+    const me = publicId(socket.data.token);
+    const other = String(to || '');
+    const thread = directThreads.get(pairKey(me, other));
+    if (!thread) return;
+    const last = thread.messages.at(-1);
+    thread.read.set(me, last?.id || 0);
+    socket.emit('mail', mailFor(socket.data.token));
+  });
+
+  socket.on('dm:invite', ({ to } = {}) => {
+    const room = findByToken(socket.data.token);
+    if (!room || (room.game !== 'cinema' && room.phase !== 'lobby')) {
+      return fail(socket, 'Приглашение можно отправить из лобби');
+    }
+    if (!canInvite(room)) return fail(socket, 'В комнате уже нет места');
+    const title = GAME_TITLE[room.game] || 'игру';
+    const sent = postDirect(socket, to, `Зову в ${title}`, {
+      code: room.code,
+      game: room.game,
+      title,
+    });
+    if (sent) socket.emit('errorMsg', { text: 'Приглашение отправлено' });
+  });
+
   socket.on('disconnect', () => {
     forgetPresence(socket);
     broadcastOnline();
@@ -1736,8 +1798,7 @@ setInterval(() => {
       const alive = room.members.some((member) => member.connected);
       const stale = room.members.every((member) => !member.connected && now - (member.disconnectedAt || now) > 10 * 60 * 1000);
       if (!room.members.length || (!alive && stale)) {
-        closeDesk(room.code);
-        rooms.delete(room.code);
+              rooms.delete(room.code);
       }
       continue;
     }
@@ -1809,30 +1870,6 @@ function pipeCloudResponse(response, res) {
   Readable.fromWeb(response.body).pipe(res);
 }
 
-const DESK_W = 1280;
-const DESK_H = 720;
-const DESK_KEYS = {
-  Enter: 'Enter',
-  Backspace: 'Backspace',
-  Tab: 'Tab',
-  Escape: 'Escape',
-  ArrowLeft: 'ArrowLeft',
-  ArrowRight: 'ArrowRight',
-  ArrowUp: 'ArrowUp',
-  ArrowDown: 'ArrowDown',
-  Delete: 'Delete',
-  Home: 'Home',
-  End: 'End',
-};
-const DESK_HOME = {
-  youtube: 'https://www.youtube.com',
-  twitch: 'https://www.twitch.tv',
-  web: 'https://www.google.com/?hl=ru',
-};
-const desks = new Map();
-const deskOpening = new Map();
-const hostVerdict = new Map();
-
 function playParsed(room, member, parsed) {
   if (!member || !parsed) return;
   if (room.video?.service === parsed.service && room.video?.id === parsed.id) return;
@@ -1852,254 +1889,6 @@ function playParsed(room, member, parsed) {
   };
   pushChat(room, 'system', `${cinemaName(member)} включил ${watchLabel(parsed)}.`);
   broadcast(room);
-}
-
-function isPrivateIp(address) {
-  const ip = String(address || '').toLowerCase().replace(/^::ffff:/, '');
-  if (!net.isIP(ip)) return true;
-  if (net.isIP(ip) === 6) {
-    return ip === '::1' || ip === '::' || ip.startsWith('fc') || ip.startsWith('fd') || ip.startsWith('fe80:');
-  }
-  const parts = ip.split('.').map((part) => Number(part));
-  const [a, b] = parts;
-  if (a === 0 || a === 10 || a === 127) return true;
-  if (a === 169 && b === 254) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && b === 168) return true;
-  if (a === 100 && b >= 64 && b <= 127) return true;
-  return false;
-}
-
-async function hostIsPublic(hostname) {
-  const host = String(hostname || '').replace(/\.+$/, '').toLowerCase();
-  if (!host || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host === 'metadata.google.internal') return false;
-  const cached = hostVerdict.get(host);
-  if (cached && Date.now() - cached.at < 10 * 60 * 1000) return cached.ok;
-  let ok = false;
-  if (net.isIP(host)) ok = !isPrivateIp(host);
-  else {
-    try {
-      const records = await dns.lookup(host, { all: true });
-      ok = records.length > 0 && records.every((item) => !isPrivateIp(item.address));
-    } catch {
-      ok = false;
-    }
-  }
-  hostVerdict.set(host, { at: Date.now(), ok });
-  return ok;
-}
-
-async function requestAllowed(raw) {
-  let url;
-  try { url = new URL(raw); } catch { return false; }
-  if (url.protocol === 'blob:' || url.protocol === 'data:') return true;
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
-  if (url.username || url.password) return false;
-  return hostIsPublic(url.hostname);
-}
-
-function mainAllowed(mode, raw) {
-  if (raw === 'about:blank') return true;
-  let url;
-  try { url = new URL(raw); } catch { return false; }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
-  if (mode === 'web') return true;
-  const host = url.hostname.toLowerCase().replace(/^www\./, '');
-  const rules = mode === 'twitch'
-    ? ['twitch.tv', 'clips.twitch.tv', 'player.twitch.tv', 'passport.twitch.tv']
-    : ['youtube.com', 'youtu.be', 'youtube-nocookie.com', 'google.com', 'gstatic.com', 'googleapis.com'];
-  return rules.some((item) => host === item || host.endsWith(`.${item}`));
-}
-
-function deskStatus(desk) {
-  return { mode: desk.mode, url: desk.url || DESK_HOME[desk.mode] || '', title: desk.title || '' };
-}
-
-function sendDesk(socket, room) {
-  const desk = desks.get(room.code);
-  if (!desk || desk.closed) return;
-  socket.emit('desk:status', deskStatus(desk));
-  if (desk.lastFrame) socket.emit('desk:frame', desk.lastFrame);
-}
-
-function enqueueDesk(desk, job) {
-  desk.chain = desk.chain.then(job).catch(() => {});
-}
-
-async function launchDeskBrowser() {
-  let chromium;
-  try {
-    chromium = require('playwright').chromium;
-  } catch {
-    return null;
-  }
-  const options = {
-    headless: true,
-    args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled', '--lang=ru-RU'],
-    ignoreDefaultArgs: ['--enable-automation'],
-  };
-  const attempts = [
-    () => chromium.launch(options),
-    () => chromium.launch({ ...options, channel: 'chrome' }),
-    () => chromium.launch({ ...options, channel: 'msedge' }),
-  ];
-  let last = null;
-  for (const attempt of attempts) {
-    try {
-      return await attempt();
-    } catch (error) {
-      last = error;
-    }
-  }
-  console.error('desk browser failed', last?.message || last);
-  return null;
-}
-
-function closeDesk(code, notify = true) {
-  deskOpening.set(code, (deskOpening.get(code) || 0) + 1);
-  const desk = desks.get(code);
-  if (!desk) return;
-  desk.closed = true;
-  desks.delete(code);
-  clearInterval(desk.timer);
-  desk.cdp?.send('Page.stopScreencast').catch(() => {});
-  desk.browser?.close().catch(() => {});
-  if (notify) io.to(code).emit('desk:closed');
-}
-
-async function openDesk(room, member, mode) {
-  if (desks.size >= 2 && !desks.has(room.code)) {
-    const socketId = member.socketId;
-    const socket = io.sockets.sockets.get(socketId);
-    if (socket) fail(socket, 'Сейчас уже открыто слишком много браузеров');
-    return;
-  }
-  const gen = (deskOpening.get(room.code) || 0) + 1;
-  deskOpening.set(room.code, gen);
-  closeDesk(room.code, false);
-  deskOpening.set(room.code, gen);
-  const browser = await launchDeskBrowser();
-  if (deskOpening.get(room.code) !== gen) {
-    await browser?.close().catch(() => {});
-    return;
-  }
-  if (!browser) {
-    const socket = io.sockets.sockets.get(member.socketId);
-    if (socket) fail(socket, 'Браузер на сервере не запустился');
-    return;
-  }
-  const context = await browser.newContext({
-    viewport: { width: DESK_W, height: DESK_H },
-    locale: 'ru-RU',
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-  });
-  await context.addInitScript(() => {
-    window.open = (url) => {
-      try { if (url) location.assign(url); } catch { /* keep the click in this window */ }
-      return null;
-    };
-  });
-  const page = await context.newPage();
-  const desk = {
-    mode,
-    page,
-    browser,
-    cdp: null,
-    closed: false,
-    armed: false,
-    url: DESK_HOME[mode],
-    title: '',
-    lastFrame: null,
-    sentAt: 0,
-    inputAt: 0,
-    chain: Promise.resolve(),
-    picked: '',
-    pendingKey: '',
-    pendingAt: 0,
-    pending: null,
-    byToken: member.token,
-    timer: null,
-  };
-  if (deskOpening.get(room.code) !== gen) {
-    await browser.close().catch(() => {});
-    return;
-  }
-  desks.set(room.code, desk);
-  await page.route('**/*', async (route) => {
-    if (desk.closed) {
-      await route.abort().catch(() => {});
-      return;
-    }
-    if (await requestAllowed(route.request().url())) await route.continue().catch(() => {});
-    else await route.abort().catch(() => {});
-  });
-  page.on('framenavigated', async (frame) => {
-    if (desk.closed || frame !== page.mainFrame()) return;
-    const href = frame.url();
-    if (href === 'about:blank') return;
-    if (!(await requestAllowed(href)) || !mainAllowed(desk.mode, href)) {
-      await page.goBack({ timeout: 4000 }).catch(async () => {
-        await page.goto(DESK_HOME[desk.mode], { timeout: 15000, waitUntil: 'domcontentloaded' }).catch(() => {});
-      });
-    }
-  });
-  context.on('page', (popup) => {
-    if (popup === page) return;
-    popup.once('framenavigated', async () => {
-      const href = popup.url();
-      await popup.close().catch(() => {});
-      if (desk.closed || href === 'about:blank') return;
-      if (await requestAllowed(href) && mainAllowed(desk.mode, href)) {
-        desk.armed = desk.mode !== 'web';
-        await page.goto(href, { timeout: 20000, waitUntil: 'domcontentloaded' }).catch(() => {});
-      }
-    });
-  });
-  const cdp = await context.newCDPSession(page);
-  desk.cdp = cdp;
-  cdp.on('Page.screencastFrame', ({ data, sessionId }) => {
-    cdp.send('Page.screencastFrameAck', { sessionId }).catch(() => {});
-    if (desk.closed) return;
-    const jpeg = Buffer.from(data, 'base64');
-    desk.lastFrame = jpeg;
-    const now = Date.now();
-    if (now - desk.sentAt >= 80) {
-      desk.sentAt = now;
-      io.to(room.code).emit('desk:frame', jpeg);
-    }
-  });
-  await cdp.send('Page.startScreencast', {
-    format: 'jpeg',
-    quality: 42,
-    maxWidth: DESK_W,
-    maxHeight: DESK_H,
-    everyNthFrame: 1,
-  });
-  desk.timer = setInterval(() => {
-    if (desk.closed) return;
-    let href = '';
-    try { href = page.url(); } catch { return; }
-    if (href && href !== desk.url) {
-      desk.url = href;
-      io.to(room.code).emit('desk:status', deskStatus(desk));
-    }
-    if (desk.mode === 'web' || !desk.armed) return;
-    const parsed = parseWatchUrl(href);
-    const fits = parsed && ((desk.mode === 'youtube' && parsed.service === 'youtube') || (desk.mode === 'twitch' && parsed.service === 'twitch'));
-    const key = fits ? `${parsed.service}:${parsed.id}` : '';
-    if (key !== desk.pendingKey) {
-      desk.pendingKey = key;
-      desk.pendingAt = Date.now();
-      desk.pending = fits ? parsed : null;
-    }
-    if (desk.pending && desk.picked !== desk.pendingKey && Date.now() - desk.pendingAt > 500) {
-      desk.picked = desk.pendingKey;
-      const actor = cinemaMember(room, desk.byToken) || room.members.find((item) => item.host);
-      playParsed(room, actor, desk.pending);
-    }
-  }, 400);
-  io.to(room.code).emit('desk:status', deskStatus(desk));
-  await page.goto(DESK_HOME[mode], { timeout: 20000, waitUntil: 'domcontentloaded' }).catch(() => {});
 }
 
 const storyboardCache = new Map();

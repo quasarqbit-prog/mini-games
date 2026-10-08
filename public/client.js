@@ -81,11 +81,12 @@ let replyDraft = null;
 let emojiOpen = false;
 let pickerTab = 'emoji';
 let stickerMenuId = '';
-function emptyDesk() {
-  return { picking: false, booting: false, live: false, mode: '', url: '', shell: '' };
-}
-let desk = emptyDesk();
-
+let mail = [];
+let openDm = '';
+let dmDraft = '';
+let inviteOpen = false;
+let pendingJoin = '';
+let mailReady = false;
 function toast(text) {
   const el = document.createElement('div');
   el.className = 'toast';
@@ -176,16 +177,20 @@ function escapeHtml(value) {
 function captureForm() {
   const chat = document.querySelector('.chat-input');
   const setup = document.querySelector('.setup-input');
+  const direct = document.querySelector('.dm-input');
   const log = document.querySelector('.chat-log');
   if (chat) chatDraft = chat.value;
   if (setup) setupDraft = setup.value;
+  if (direct) dmDraft = direct.value;
   if (log) stickChat = log.scrollHeight - log.scrollTop - log.clientHeight < 48;
   const active = document.activeElement;
   focusKind = active?.classList.contains('chat-input')
     ? 'chat'
     : active?.classList.contains('setup-input')
       ? 'setup'
-      : null;
+      : active?.classList.contains('dm-input')
+        ? 'dm'
+        : null;
 }
 
 function restoreForm() {
@@ -194,9 +199,14 @@ function restoreForm() {
   const log = document.querySelector('.chat-log');
   if (chat) chat.value = chatDraft;
   if (setup) setup.value = setupDraft;
+  const direct = document.querySelector('.dm-input');
+  if (direct) direct.value = dmDraft;
   if (log && stickChat) log.scrollTop = log.scrollHeight;
+  const dmLog = document.querySelector('.dm-block.open .dm-log');
+  if (dmLog) dmLog.scrollTop = dmLog.scrollHeight;
   if (focusKind === 'chat' && chat) chat.focus();
   if (focusKind === 'setup' && setup) setup.focus();
+  if (focusKind === 'dm' && direct) direct.focus();
 }
 
 function roleName(role) {
@@ -437,18 +447,65 @@ function chatHtml() {
     </section>`;
 }
 
-function onlineHtml() {
-  const people = onlineUsers.map((person) => `
-    <li class="online-person">
+function menuChatHtml() {
+  const blocks = mail.map((person) => {
+    const open = openDm === person.id;
+    const last = person.messages.at(-1);
+    const preview = last?.invite ? `Приглашение в ${last.invite.title}` : (last?.text || 'Написать');
+    const name = person.name || 'Без имени';
+    const lines = person.messages.map((msg) => {
+      if (msg.invite) {
+        return `
+          <div class="dm-msg${msg.mine ? ' mine' : ''}">
+            <div class="dm-invite">
+              <b>Приглашение в ${escapeHtml(msg.invite.title)}</b>
+              <p>Код ${escapeHtml(msg.invite.code)}</p>
+              ${msg.mine ? '' : `<button type="button" class="btn" data-act="join-code" data-code="${escapeHtml(msg.invite.code)}">Присоединиться</button>`}
+            </div>
+          </div>`;
+      }
+      return `<div class="dm-msg${msg.mine ? ' mine' : ''}"><p>${escapeHtml(msg.text)}</p><small>${escapeHtml(chatStamp(msg.at))}</small></div>`;
+    }).join('');
+    return `
+      <article class="dm-block${open ? ' open' : ''}">
+        <button type="button" class="dm-head" data-act="dm-open" data-id="${escapeHtml(person.id)}">
+          ${avatarHtml(person, name)}
+          <span><b>${escapeHtml(name)}</b><small>${escapeHtml(preview)}</small></span>
+          <i class="status-dot${person.online ? ' on' : ''}"></i>
+          ${person.unread ? `<em class="badge">${person.unread}</em>` : ''}
+        </button>
+        ${open ? `
+          <div class="dm-log">${lines || '<p class="note">Напиши первое сообщение</p>'}</div>
+          <form class="dm-form" data-act="dm-send" data-to="${escapeHtml(person.id)}">
+            <input class="dm-input" maxlength="400" placeholder="Сообщение" autocomplete="off" value="${escapeHtml(dmDraft)}">
+            <button class="btn" type="submit">Отправить</button>
+          </form>` : ''}
+      </article>`;
+  }).join('');
+  return `
+    <section class="menu-chat">
+      <h2>Чат</h2>
+      ${blocks || '<p class="note">Когда кто-то будет онлайн, здесь появится блок для переписки.</p>'}
+    </section>`;
+}
+
+function paintInvite() {
+  document.querySelector('.invite-box')?.remove();
+  if (!inviteOpen) return;
+  const people = mail.filter((person) => person.online);
+  const rows = people.map((person) => `
+    <li>
       ${avatarHtml(person, person.name || 'Игрок')}
       <span>${escapeHtml(person.name || 'Без имени')}</span>
-      ${person.you ? '<i>это ты</i>' : ''}
+      <button type="button" class="btn" data-act="invite-send" data-id="${escapeHtml(person.id)}">Пригласить</button>
     </li>`).join('');
-  return `
-    <section class="online">
-      <h2>Сейчас онлайн</h2>
-      ${people ? `<ul>${people}</ul>` : '<p class="note">Пока никого нет</p>'}
-    </section>`;
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="invite-box">
+      <div class="invite-card">
+        <div class="invite-head"><b>Пригласить через чат</b><button type="button" class="btn ghost" data-act="invite-close">Закрыть</button></div>
+        ${rows ? `<ul>${rows}</ul>` : '<p class="note">Сейчас никого нет онлайн.</p>'}
+      </div>
+    </div>`);
 }
 
 function homeHtml() {
@@ -493,7 +550,7 @@ function homeHtml() {
           <span class="tag">2–6 игроков</span>
         </button>
       </div>
-      ${onlineHtml()}
+      ${menuChatHtml()}
     </section>`;
 }
 
@@ -523,6 +580,7 @@ function lobbyHtml() {
         ${isHost
           ? `<button class="btn" type="button" data-act="start" ${guestHere ? '' : 'disabled'}>Начать игру</button>`
           : `<button class="btn" type="button" disabled>Ждём, пока хост начнёт</button>`}
+        <button class="btn ghost" type="button" data-act="invite-open">Пригласить в чат</button>
         <button class="btn ghost" type="button" data-act="leave">Выйти</button>
       </div>
       ${lobbyPanes(isHost)}
@@ -1131,8 +1189,6 @@ function adminMenuHtml() {
         <input class="cinema-url" value="${escapeHtml(cinemaUrlDraft)}" placeholder="YouTube, Twitch, Drive или Dropbox" autocomplete="off">
         <button class="btn wide" type="submit">Сменить видео</button>
       </form>
-      <button class="btn ghost wide" type="button" data-act="browse-open">Браузер видео</button>
-      <button class="btn ghost wide" type="button" data-act="web-open">Браузер</button>
       <p class="note">Можно сменить ролик, даже если ты не хост.</p>`;
   } else if (state?.game === 'battle' && state.phase !== 'lobby') {
     const count = (state.foeFleet || []).filter((ship) => ship.r != null).length;
@@ -1163,7 +1219,6 @@ function render() {
     return;
   }
   if (state?.game === 'mono') {
-    desk = emptyDesk();
     document.body.classList.remove('in-cinema');
     document.body.classList.add('in-mono');
     document.body.classList.toggle('in-game', state.phase !== 'lobby');
@@ -1174,10 +1229,10 @@ function render() {
     window.MonopolyUI.mount();
     paintPicker();
     paintAdminMenu();
+    paintInvite();
     return;
   }
   document.body.classList.remove('in-mono');
-  desk = emptyDesk();
   captureForm();
   document.body.classList.remove('in-cinema');
   document.body.classList.toggle('in-game', Boolean(state && state.phase !== 'lobby'));
@@ -1195,6 +1250,7 @@ function render() {
   restoreForm();
   paintPicker();
   paintAdminMenu();
+  paintInvite();
 }
 
 function viewKey(snapshot) {
@@ -1406,38 +1462,38 @@ document.addEventListener('click', (event) => {
     patchCinemaSide();
   }
   if (act === 'give-host') socket.emit('cinema:host', { id: el.dataset.id });
+  if (act === 'invite-open') {
+    inviteOpen = true;
+    paintInvite();
+  }
+  if (act === 'invite-close') {
+    inviteOpen = false;
+    paintInvite();
+  }
+  if (act === 'invite-send') {
+    socket.emit('dm:invite', { to: el.dataset.id });
+    inviteOpen = false;
+    paintInvite();
+  }
+  if (act === 'dm-open') {
+    openDm = openDm === el.dataset.id ? '' : el.dataset.id;
+    dmDraft = '';
+    if (openDm) socket.emit('dm:read', { to: openDm });
+    render();
+  }
+  if (act === 'join-code') {
+    const code = el.dataset.code || '';
+    if (state && state.code !== code) {
+      pendingJoin = code;
+      socket.emit('leave');
+      return;
+    }
+    socket.emit('join', { code });
+  }
   if (act === 'hud-cc') {
     localStorage.setItem(CINEMA_CC_KEY, captionsOn() ? '0' : '1');
     applyCaptions();
   }
-  if (act === 'browse-open' && (state?.youHost || isLocalAdmin())) {
-    desk = { ...emptyDesk(), picking: true, shell: 'pick' };
-    paintDesk();
-  }
-  if (act === 'web-open' && (state?.youHost || isLocalAdmin())) {
-    desk = { ...emptyDesk(), booting: true, mode: 'web', shell: 'boot:web' };
-    paintDesk();
-    socket.emit('cinema:desk', { mode: 'web' });
-  }
-  if (act === 'browse-close') {
-    const live = desk.live;
-    desk = emptyDesk();
-    paintDesk();
-    if (live) socket.emit('cinema:desk-close');
-  }
-  if (act === 'browse-back') {
-    if (desk.live) socket.emit('cinema:desk-close');
-    desk = { ...emptyDesk(), picking: true, shell: 'pick' };
-    paintDesk();
-  }
-  if (act === 'browse-service') {
-    const mode = el.dataset.service === 'twitch' ? 'twitch' : 'youtube';
-    desk = { ...emptyDesk(), booting: true, mode, shell: `boot:${mode}` };
-    paintDesk();
-    socket.emit('cinema:desk', { mode });
-  }
-  if (act === 'desk-nav') socket.emit('cinema:desk-nav', { act: el.dataset.nav });
-  if (act === 'desk-take') socket.emit('cinema:desk-take');
   if (act === 'hud-toggle') toggleHud(el);
   if (act === 'hud-pause') hudTogglePause();
   if (act === 'hud-seek') hudSeek(Number(el.dataset.by) || 0);
@@ -1505,9 +1561,12 @@ document.addEventListener('submit', (event) => {
     socket.emit('cinema:video', { url: input.value });
     return;
   }
-  if (act === 'desk-go') {
-    const input = form.querySelector('input');
-    socket.emit('cinema:desk-nav', { act: 'go', url: input?.value || '' });
+  if (act === 'dm-send') {
+    const input = form.querySelector('.dm-input');
+    socket.emit('dm', { to: form.dataset.to, text: input?.value || '' });
+    dmDraft = '';
+    if (input) input.value = '';
+    return;
   }
   if (act === 'save-profile') {
     const name = form.querySelector('.profile-name').value.replace(/\s+/g, ' ').trim().slice(0, 20);
@@ -1525,7 +1584,7 @@ document.addEventListener('submit', (event) => {
 document.addEventListener('input', (event) => {
   const target = event.target;
   if (target?.classList?.contains('cinema-url')) cinemaUrlDraft = target.value;
-  if (target?.classList?.contains('desk-url')) desk.url = target.value;
+  if (target?.classList?.contains('dm-input')) dmDraft = target.value;
   if (event.target?.classList?.contains('cinema-volume')) {
     const value = Number(target.value);
     localStorage.setItem(CINEMA_VOL_KEY, String(value));
@@ -1611,19 +1670,6 @@ document.addEventListener('change', async (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
-  if (document.activeElement?.classList?.contains('desk-screen') && desk.live && (state?.youHost || isLocalAdmin())) {
-    if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
-      event.preventDefault();
-      socket.emit('cinema:desk-input', { type: 'type', text: event.key });
-      return;
-    }
-    const named = ['Enter', 'Backspace', 'Tab', 'Escape', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Delete', 'Home', 'End'];
-    if (named.includes(event.key)) {
-      event.preventDefault();
-      socket.emit('cinema:desk-input', { type: 'key', key: event.key });
-      return;
-    }
-  }
   if (event.key === 'F2') {
     if (!isLocalAdmin()) return;
     event.preventDefault();
@@ -1693,6 +1739,25 @@ socket.on('hello', (payload) => {
 socket.on('online', (list) => {
   onlineUsers = Array.isArray(list) ? list : [];
   if (!state && !booting) render();
+});
+
+socket.on('mail', (list) => {
+  const next = Array.isArray(list) ? list : [];
+  if (mailReady) {
+    const prev = new Map(mail.map((person) => [person.id, person.messages.at(-1)?.id || 0]));
+    next.forEach((person) => {
+      const last = person.messages.at(-1);
+      if (!last || last.mine || (prev.get(person.id) || 0) >= last.id) return;
+      if (openDm === person.id && !state) return;
+      playChatSound();
+      const who = person.name || 'Игрок';
+      toast(last.invite ? `${who} зовёт в ${last.invite.title}` : `${who}: ${last.text}`);
+    });
+  }
+  mailReady = true;
+  mail = next;
+  if (!state && !booting) render();
+  else paintInvite();
 });
 
 function handleBattleState(next) {
@@ -1841,8 +1906,13 @@ socket.on('closed', ({ message }) => {
   lobbyTab = 'chat';
   lobbyUnread = 0;
   fleetDraft = null;
-  desk = emptyDesk();
+  const joining = pendingJoin;
+  pendingJoin = '';
   render();
+  if (joining) {
+    socket.emit('join', { code: joining });
+    return;
+  }
   toast(message || 'Комната закрыта');
 });
 
@@ -1853,11 +1923,6 @@ socket.on('errorMsg', (payload) => {
     render();
   }
   toast(text || 'Ошибка');
-  if (desk.booting && /браузер|страница/i.test(text || '')) {
-    const mode = desk.mode;
-    desk = mode === 'web' ? emptyDesk() : { ...emptyDesk(), picking: true, shell: 'pick' };
-    paintDesk();
-  }
   if (payload?.shake) shakeDraft();
 });
 
@@ -2219,224 +2284,12 @@ function hostRoomCard() {
         <strong>${escapeHtml(state.code)}</strong>
       </div>
       <button class="btn" type="button" data-act="copy-link">Скопировать ссылку</button>
-      <button class="btn ghost wide" type="button" data-act="browse-open">Браузер видео</button>
-      <button class="btn ghost wide" type="button" data-act="web-open">Браузер</button>
       ${state.video?.id ? `<form data-act="cinema-url">
         <input class="cinema-url" value="${escapeHtml(cinemaUrlDraft)}" placeholder="Другая ссылка" autocomplete="off">
         <button class="btn" type="submit">Сменить</button>
       </form>` : ''}
     </div>`;
 }
-
-function deskShell() {
-  if (desk.live) return `live:${desk.mode}`;
-  if (desk.booting) return `boot:${desk.mode}`;
-  if (desk.picking) return 'pick';
-  return '';
-}
-
-function paintDesk() {
-  const root = document.querySelector('.browse');
-  if (!root) return;
-  const shell = deskShell();
-  const open = Boolean(shell);
-  root.hidden = !open;
-  if (!open) {
-    root.innerHTML = '';
-    desk.shell = '';
-    return;
-  }
-  if (root.dataset.shell === shell) {
-    const field = root.querySelector('.desk-url');
-    if (field && document.activeElement !== field) field.value = desk.url || '';
-    return;
-  }
-  root.dataset.shell = shell;
-  desk.shell = shell;
-  const control = Boolean(state?.youHost || isLocalAdmin());
-  if (shell === 'pick') {
-    root.innerHTML = `
-      <div class="browse-head"><b>Где искать видео?</b><button type="button" class="btn ghost" data-act="browse-close">Закрыть</button></div>
-      <div class="browse-services">
-        <button type="button" data-act="browse-service" data-service="youtube">YouTube</button>
-        <button type="button" data-act="browse-service" data-service="twitch">Twitch</button>
-      </div>
-      <p class="note">Откроется сам сайт. Нажми на видео — ссылка встанет и ролик включится у всех.</p>`;
-    return;
-  }
-  const title = desk.mode === 'twitch' ? 'Twitch' : desk.mode === 'web' ? 'Браузер' : 'YouTube';
-  const waiting = shell.startsWith('boot');
-  const nav = control ? `
-    <button type="button" class="btn ghost" data-act="desk-nav" data-nav="back">Назад</button>
-    <button type="button" class="btn ghost" data-act="desk-nav" data-nav="forward">Вперёд</button>
-    <button type="button" class="btn ghost" data-act="desk-nav" data-nav="reload">Обновить</button>` : '';
-  const take = control && desk.mode !== 'web'
-    ? '<button type="button" class="btn" data-act="desk-take">Включить это видео</button>'
-    : '';
-  const address = control
-    ? `<form class="browse-search" data-act="desk-go"><input class="desk-url" value="${escapeHtml(desk.url || '')}" placeholder="Адрес" autocomplete="off"><button class="btn" type="submit">Открыть</button></form>`
-    : `<p class="desk-url-view">${escapeHtml(desk.url || 'Запускаем…')}</p>`;
-  root.innerHTML = `
-    <div class="browse-head">
-      ${desk.mode === 'web' || !control ? '' : '<button type="button" class="btn ghost" data-act="browse-back">К выбору</button>'}
-      <b>${title}</b>
-      ${control ? '<button type="button" class="btn ghost" data-act="browse-close">Закрыть</button>' : '<span class="note">Смотрит вся комната</span>'}
-    </div>
-    ${address}
-    <div class="desk-stage">
-      <canvas class="desk-screen" tabindex="0" width="1280" height="720"></canvas>
-      <i class="desk-cursor" hidden></i>
-      ${waiting ? '<p class="desk-wait">Запускаем браузер…</p>' : ''}
-    </div>
-    <div class="desk-tools">${nav}${take}</div>
-    <p class="note">${desk.mode === 'web' ? 'Поиск Google видят все. Страницей управляет хост.' : 'Нажми на ролик на сайте — он включится в кинотеатре.'}</p>`;
-}
-
-function deskPoint(event, canvas) {
-  const rect = canvas.getBoundingClientRect();
-  if (!canvas.width || !canvas.height || !rect.width || !rect.height) return null;
-  const scale = Math.min(rect.width / canvas.width, rect.height / canvas.height);
-  const drawnW = canvas.width * scale;
-  const drawnH = canvas.height * scale;
-  const offX = (rect.width - drawnW) / 2;
-  const offY = (rect.height - drawnH) / 2;
-  const x = (event.clientX - rect.left - offX) / drawnW;
-  const y = (event.clientY - rect.top - offY) / drawnH;
-  if (x < 0 || y < 0 || x > 1 || y > 1) return null;
-  return { x, y };
-}
-
-function placeDeskCursor(x, y) {
-  const canvas = document.querySelector('.desk-screen');
-  const dot = document.querySelector('.desk-cursor');
-  if (!canvas || !dot || !canvas.width) return;
-  const rect = canvas.getBoundingClientRect();
-  const stage = canvas.parentElement.getBoundingClientRect();
-  const scale = Math.min(rect.width / canvas.width, rect.height / canvas.height);
-  const drawnW = canvas.width * scale;
-  const drawnH = canvas.height * scale;
-  const offX = rect.left - stage.left + (rect.width - drawnW) / 2;
-  const offY = rect.top - stage.top + (rect.height - drawnH) / 2;
-  dot.hidden = false;
-  dot.style.left = `${offX + x * drawnW}px`;
-  dot.style.top = `${offY + y * drawnH}px`;
-}
-
-let deskFrame = null;
-let deskDrawing = false;
-let deskDown = false;
-let deskMoveAt = 0;
-
-function queueDeskFrame(payload) {
-  const bytes = payload instanceof ArrayBuffer
-    ? new Uint8Array(payload)
-    : ArrayBuffer.isView(payload)
-      ? new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength)
-      : null;
-  if (!bytes) return;
-  deskFrame = bytes;
-  if (deskDrawing) return;
-  deskDrawing = true;
-  (async () => {
-    while (deskFrame) {
-      const next = deskFrame;
-      deskFrame = null;
-      try {
-        const bmp = await createImageBitmap(new Blob([next], { type: 'image/jpeg' }));
-        const canvas = document.querySelector('.desk-screen');
-        if (canvas) {
-          if (canvas.width !== bmp.width || canvas.height !== bmp.height) {
-            canvas.width = bmp.width;
-            canvas.height = bmp.height;
-          }
-          canvas.getContext('2d').drawImage(bmp, 0, 0);
-          document.querySelector('.desk-wait')?.remove();
-        }
-        bmp.close?.();
-      } catch { /* frame is still arriving */ }
-    }
-    deskDrawing = false;
-  })();
-}
-
-function sendDeskPoint(type, point, extra = {}) {
-  if (!point || !(state?.youHost || isLocalAdmin())) return;
-  socket.emit('cinema:desk-input', { type, x: point.x, y: point.y, ...extra });
-  if (type === 'move' || type === 'down') placeDeskCursor(point.x, point.y);
-}
-
-document.addEventListener('pointerdown', (event) => {
-  const canvas = event.target.closest?.('.desk-screen');
-  if (!canvas || !desk.live || !(state?.youHost || isLocalAdmin())) return;
-  event.preventDefault();
-  canvas.focus();
-  const point = deskPoint(event, canvas);
-  if (!point) return;
-  deskDown = true;
-  sendDeskPoint('down', point);
-});
-
-document.addEventListener('pointermove', (event) => {
-  const canvas = document.querySelector('.desk-screen');
-  if (!canvas || !desk.live || !(state?.youHost || isLocalAdmin())) return;
-  if (!deskDown && event.target?.closest?.('.desk-screen') !== canvas) return;
-  const now = Date.now();
-  if (now - deskMoveAt < 40) return;
-  deskMoveAt = now;
-  const point = deskPoint(event, canvas);
-  if (!point) return;
-  sendDeskPoint('move', point);
-});
-
-document.addEventListener('pointerup', (event) => {
-  if (!deskDown) return;
-  deskDown = false;
-  const canvas = document.querySelector('.desk-screen');
-  const point = canvas ? deskPoint(event, canvas) : null;
-  if (point) sendDeskPoint('up', point);
-  else if (state?.youHost || isLocalAdmin()) socket.emit('cinema:desk-input', { type: 'up', x: 0, y: 0 });
-});
-
-document.addEventListener('wheel', (event) => {
-  const canvas = event.target.closest?.('.desk-screen');
-  if (!canvas || !desk.live || !(state?.youHost || isLocalAdmin())) return;
-  event.preventDefault();
-  const point = deskPoint(event, canvas);
-  if (!point) return;
-  sendDeskPoint('wheel', point, { deltaX: event.deltaX, deltaY: event.deltaY });
-}, { passive: false });
-
-socket.on('desk:status', (payload) => {
-  if (state?.game !== 'cinema') return;
-  const mode = payload?.mode === 'twitch' || payload?.mode === 'web' ? payload.mode : 'youtube';
-  desk.picking = false;
-  desk.booting = false;
-  desk.live = true;
-  desk.mode = mode;
-  desk.url = payload?.url || '';
-  paintDesk();
-});
-
-socket.on('desk:frame', (payload) => {
-  if (!desk.live && !desk.booting) return;
-  if (!desk.live) {
-    desk.booting = false;
-    desk.live = true;
-    paintDesk();
-  }
-  queueDeskFrame(payload);
-});
-
-socket.on('desk:cursor', ({ x, y } = {}) => {
-  if (!desk.live || state?.youHost) return;
-  placeDeskCursor(Number(x) || 0, Number(y) || 0);
-});
-
-socket.on('desk:closed', () => {
-  if (desk.picking && !desk.live) return;
-  desk = emptyDesk();
-  paintDesk();
-});
 
 function captionsOn() {
   return localStorage.getItem(CINEMA_CC_KEY) === '1';
@@ -2877,7 +2730,6 @@ function cinemaHtml() {
     <section class="cinema">
       <div class="stage">
         <div class="stage-frame">${stage}${hud}</div>
-        <div class="browse" hidden></div>
         <div class="fs-edge" aria-hidden="true"></div>
         <div class="fs-float" aria-live="polite"></div>
         <div class="soft-keys" aria-label="Клавиатура"></div>
@@ -2893,6 +2745,7 @@ function cinemaHtml() {
           </div>
           <div class="cinema-head-actions">
             <button type="button" class="profile-chip" data-act="profile">${avatarHtml(profile, 'Я')}</button>
+            <button class="btn ghost" type="button" data-act="invite-open">Пригласить</button>
             <button class="btn ghost" type="button" data-act="leave">Выйти</button>
           </div>
         </div>
@@ -2947,14 +2800,14 @@ function renderCinema() {
     paintPoster();
     paintSoftKeys();
     syncChatInputMode();
-    paintDesk();
     paintAdminMenu();
+    paintInvite();
     return;
   }
   patchCinemaSide();
   paintPoster();
-  paintDesk();
   paintAdminMenu();
+  paintInvite();
 }
 
 function handleCinemaState(next) {

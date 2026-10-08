@@ -106,6 +106,95 @@ button {
   font-size: 13px;
 }
 
+.menu-chat {
+  margin-top: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.menu-chat h2 {
+  margin: 0;
+  font-family: Unbounded, Manrope, sans-serif;
+  font-size: 18px;
+}
+.dm-block {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  overflow: hidden;
+}
+.dm-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 0;
+  background: transparent;
+  color: var(--cream);
+  text-align: left;
+}
+.dm-head span { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.dm-head b { font-size: 15px; }
+.dm-head small {
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dm-head .badge { margin-left: 0; }
+.dm-log {
+  max-height: 280px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 12px 12px;
+}
+.dm-msg { max-width: 80%; }
+.dm-msg p, .dm-invite {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 14px;
+  background: #241c18;
+}
+.dm-msg.mine { margin-left: auto; }
+.dm-msg.mine p, .dm-msg.mine .dm-invite { background: #3a241c; }
+.dm-msg small { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
+.dm-invite { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.dm-form { display: flex; gap: 8px; padding: 0 12px 12px; }
+.dm-form input {
+  flex: 1;
+  min-width: 0;
+  height: 42px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: #14110e;
+  color: var(--cream);
+  padding: 0 12px;
+}
+.invite-box {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(8, 6, 5, 0.72);
+}
+.invite-card {
+  width: min(420px, 100%);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 14px;
+}
+.invite-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.invite-card ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.invite-card li { display: flex; align-items: center; gap: 10px; }
+.invite-card li span { flex: 1; }
+
 .lead {
   margin: 0 0 22px;
   max-width: 460px;
