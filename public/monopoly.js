@@ -3,7 +3,13 @@ window.MonopolyUI = (() => {
   let focusId = '';
   let view = { scale: 1, x: 0, y: 0 };
   let seenDice = 0;
+  let seenMove = 0;
+  let primed = false;
   let clock = 0;
+  let walkTimer = 0;
+  let resizeBound = false;
+  const shown = new Map();
+  const queues = new Map();
 
   function esc(value) {
     return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
@@ -31,7 +37,7 @@ window.MonopolyUI = (() => {
   }
 
   function side(index) {
-    if (index === 20 || (index > 20 && index < 30)) return 'top';
+    if (index === 20 || (index > 20 && index < 30)) return 'north';
     if (index === 10 || (index > 10 && index < 20)) return 'left';
     if (index === 30 || index > 30) return 'right';
     return 'bottom';
@@ -50,6 +56,7 @@ window.MonopolyUI = (() => {
   }
 
   function page(state) {
+    noteMove(state);
     if (state.phase === 'lobby') return lobby(state);
     if (state.phase === 'done') return finished(state);
     return match(state);
@@ -75,6 +82,7 @@ window.MonopolyUI = (() => {
           <p class="note">За стол садятся от 2 до 6. Сейчас ${ready}.</p>
         </div>
         <div class="players">${seats}</div>
+        ${piecePicker(state)}
         <section class="rules">
           <h3>Старт</h3>
           <div class="rule">
@@ -126,7 +134,7 @@ window.MonopolyUI = (() => {
           <div class="mono-zoom">${board(state)}</div>
         </div>
         <aside class="mono-side">
-          ${players(state)}
+          ${peopleBlock(state)}
           ${assets(state, focusId)}
           ${actions(state)}
         </aside>
@@ -143,7 +151,7 @@ window.MonopolyUI = (() => {
             ${tab === 'trade' ? tradeBox(state) : ''}
             ${tab === 'history' ? `<div class="mono-history">${history(state)}</div>` : ''}
             ${tab === 'chat' ? chat(state) : ''}
-            ${tab === 'play' ? `${players(state)}${actions(state)}` : ''}
+            ${tab === 'play' ? `${peopleBlock(state)}${actions(state)}` : ''}
           </div>
         </div>
       </section>`;
@@ -152,19 +160,18 @@ window.MonopolyUI = (() => {
   function board(state) {
     const cells = state.tiles.map((tile) => {
       const [column, row] = place(tile.i);
-      const here = state.players.filter((player) => !player.bankrupt && player.pos === tile.i);
+      const here = state.players.filter((player) => !player.bankrupt && cellOf(player) === tile.i);
       const owner = state.players.find((player) => player.id === tile.owner);
       const marks = tile.houses === 5
         ? '<i class="hotel">H</i>'
         : Array.from({ length: tile.houses }, () => '<i class="house"></i>').join('');
       return `
-        <article class="cell ${side(tile.i)}${tile.mortgaged ? ' mortgaged' : ''}${here.length ? ' here' : ''}" style="grid-column:${column};grid-row:${row}${owner ? `;box-shadow:inset 0 0 0 2px ${owner.color}` : ''}">
+        <article class="cell ${side(tile.i)}${tile.mortgaged ? ' mortgaged' : ''}${here.length ? ' here' : ''}" data-i="${tile.i}" style="grid-column:${column};grid-row:${row}${owner ? `;box-shadow:inset 0 0 0 2px ${owner.color}` : ''}">
           ${tile.color ? `<b class="swatch" style="background:${esc(tile.color)}"></b>` : ''}
           <span>${esc(tile.name)}</span>
           ${tile.price && !tile.owner ? `<small>${tile.price}</small>` : ''}
           ${marks ? `<em class="builds">${marks}</em>` : ''}
           ${tile.mortgaged ? '<small>залог</small>' : ''}
-          <span class="tokens">${here.map((player) => `<i style="background:${esc(player.color)}" title="${esc(nameOf(player))}">${esc(player.token)}</i>`).join('')}</span>
         </article>`;
     }).join('');
     return `
@@ -174,6 +181,7 @@ window.MonopolyUI = (() => {
           ${dice(state)}
           ${center(state)}
         </div>
+        ${pieces(state)}
       </div>`;
   }
 
@@ -234,6 +242,101 @@ window.MonopolyUI = (() => {
     }
     const last = state.log.at(-1);
     return `<p class="mono-last">${esc(last?.text || 'Бросьте кубики')}</p>`;
+  }
+
+  function peopleBlock(state) {
+    return `${players(state)}${piecePicker(state)}`;
+  }
+
+  function piecePicker(state) {
+    const self = you(state);
+    if (!self || self.bankrupt) return '';
+    const options = state.tokens || ['🚗', '🐕', '🚢', '🎩', '👢', '🐈'];
+    return `
+      <div class="piece-pick">
+        <span>Фишка</span>
+        ${options.map((piece) => {
+          const owner = state.players.find((player) => player.token === piece);
+          const mine = self.token === piece;
+          const taken = Boolean(owner && !mine);
+          return `<button type="button" class="${mine ? 'on' : ''}" data-act="mono" data-op="piece" data-piece="${piece}" ${taken ? 'disabled' : ''} title="${taken ? esc(nameOf(owner)) : 'Выбрать фишку'}">${piece}</button>`;
+        }).join('')}
+      </div>`;
+  }
+
+  function cellOf(player) {
+    return shown.has(player.id) ? shown.get(player.id) : player.pos;
+  }
+
+  function pieces(state) {
+    return `<div class="pieces">${state.players.filter((player) => !player.bankrupt).map((player) => `
+      <i class="piece" data-id="${esc(player.id)}" data-cell="${cellOf(player)}" style="background:${esc(player.color)}" title="${esc(nameOf(player))}">${esc(player.token)}</i>
+    `).join('')}</div>`;
+  }
+
+  function noteMove(state) {
+    state.players.forEach((player) => {
+      if (!shown.has(player.id)) shown.set(player.id, player.pos);
+    });
+    if (!primed) {
+      primed = true;
+      seenMove = state.move?.id || 0;
+      state.players.forEach((player) => shown.set(player.id, player.pos));
+      return;
+    }
+    const move = state.move;
+    if (!move || move.id === seenMove) return;
+    seenMove = move.id;
+    if (move.who && Array.isArray(move.path) && move.path.length) {
+      shown.set(move.who, move.from);
+      queues.set(move.who, move.path.slice());
+      kick();
+    } else if (move.who != null) {
+      const player = state.players.find((item) => item.id === move.who);
+      if (player) shown.set(player.id, player.pos);
+    }
+  }
+
+  function kick() {
+    if (walkTimer) return;
+    walkTimer = setInterval(() => {
+      let pending = false;
+      queues.forEach((path, id) => {
+        if (!path.length) return;
+        shown.set(id, path.shift());
+        if (path.length) pending = true;
+      });
+      placePieces();
+      if (!pending) {
+        clearInterval(walkTimer);
+        walkTimer = 0;
+      }
+    }, 180);
+  }
+
+  function placePieces() {
+    const board = document.querySelector('.mono-board');
+    if (!board) return;
+    const groups = new Map();
+    board.querySelectorAll('.piece').forEach((el) => {
+      const cell = shown.has(el.dataset.id) ? shown.get(el.dataset.id) : Number(el.dataset.cell);
+      if (!groups.has(cell)) groups.set(cell, []);
+      groups.get(cell).push(el);
+    });
+    board.querySelectorAll('.cell.here').forEach((el) => el.classList.remove('here'));
+    groups.forEach((list, cell) => {
+      const tile = board.querySelector(`.cell[data-i="${cell}"]`);
+      if (!tile) return;
+      tile.classList.add('here');
+      list.forEach((el, index) => {
+        const shift = (index - (list.length - 1) / 2) * 18;
+        el.style.left = `${tile.offsetLeft + tile.offsetWidth / 2 + shift}px`;
+        el.style.top = `${tile.offsetTop + tile.offsetHeight * 0.62}px`;
+      });
+    });
+    requestAnimationFrame(() => {
+      board.querySelectorAll('.piece:not([data-ready])').forEach((el) => { el.dataset.ready = '1'; });
+    });
   }
 
   function players(state) {
@@ -378,6 +481,11 @@ window.MonopolyUI = (() => {
 
   function mount() {
     clearInterval(clock);
+    placePieces();
+    if (!resizeBound) {
+      resizeBound = true;
+      window.addEventListener('resize', placePieces);
+    }
     const boardEl = document.querySelector('.mono-board');
     if (boardEl) {
       const id = Number(boardEl.dataset.dice || 0);

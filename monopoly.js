@@ -213,12 +213,51 @@ function charge(room, player, amount, creditorId, reason) {
   return false;
 }
 
+function forwardPath(from, to) {
+  const path = [];
+  let cursor = from;
+  while (cursor !== to) {
+    cursor = (cursor + 1) % 40;
+    path.push(cursor);
+    if (path.length > 40) break;
+  }
+  return path;
+}
+
+function backPath(from, steps) {
+  const path = [];
+  let cursor = from;
+  for (let n = 0; n < steps; n += 1) {
+    cursor = (cursor + 39) % 40;
+    path.push(cursor);
+  }
+  return path;
+}
+
+function pushMove(room, player, from, path) {
+  if (!path.length) return;
+  if (room.move && room.move.who === player.id && room.move.stamp === room.diceId && room.diceId) {
+    room.move.path.push(...path);
+    room.move.to = path[path.length - 1];
+    return;
+  }
+  room.move = {
+    id: (room.move?.id || 0) + 1,
+    stamp: room.diceId,
+    who: player.id,
+    from,
+    to: path[path.length - 1],
+    path,
+  };
+}
+
 function sendJail(room, player, why) {
+  const from = player.pos;
   player.pos = 10;
   player.inJail = true;
   player.jailTries = 0;
   room.doubles = 0;
-  room.move = { id: (room.move?.id || 0) + 1, from: player.pos, to: 10 };
+  if (from !== 10) pushMove(room, player, from, [10]);
   log(room, `${pname(player)} отправляется в тюрьму${why ? `: ${why}` : ''}.`);
 }
 
@@ -230,7 +269,7 @@ function jump(room, player, index, collect) {
   const from = player.pos;
   if (collect && from !== index && (index < from || index === 0)) passGo(room, player);
   player.pos = index;
-  room.move = { id: room.diceId + index + 1, from, to: index };
+  pushMove(room, player, from, forwardPath(from, index));
   land(room, player);
 }
 
@@ -390,7 +429,7 @@ function doRoll(room, player) {
 function walk(room, player, steps, collect) {
   const from = player.pos;
   player.pos = (player.pos + steps) % 40;
-  room.move = { id: room.diceId, from, to: player.pos };
+  pushMove(room, player, from, forwardPath(from, player.pos));
   if (collect && player.pos < from) passGo(room, player);
   land(room, player);
 }
@@ -709,6 +748,7 @@ function leaveJail(room, player, how) {
 function act(room, player, payload = {}) {
   if (!player) return 'Ты не в этой партии';
   const op = payload.act;
+  if (op === 'piece') return choosePiece(room, player, payload.piece);
   if (op === 'roll') return player.inJail && room.step === 'jail' ? leaveJail(room, player, 'roll') : doRoll(room, player);
   if (op === 'buy') return buy(room, player);
   if (op === 'decline') return decline(room, player);
@@ -744,6 +784,14 @@ function tick(room, now) {
   return true;
 }
 
+function choosePiece(room, player, piece) {
+  if (room.phase === 'done') return 'Партия уже закончилась';
+  if (!TOKENS.includes(piece)) return 'Такой фишки нет';
+  if (room.players.some((other) => other.id !== player.id && other.piece === piece)) return 'Эту фишку уже взяли';
+  player.piece = piece;
+  return '';
+}
+
 function start(room) {
   const ready = room.players.filter((player) => player.connected && !player.bankrupt);
   if (ready.length < 2) return 'Нужны хотя бы два игрока';
@@ -755,7 +803,6 @@ function start(room) {
     player.jailTries = 0;
     player.bankrupt = false;
     player.cards = 0;
-    player.piece = TOKENS[index % TOKENS.length];
     player.color = COLORS[index % COLORS.length];
     player.host = index === 0;
   });
@@ -772,6 +819,13 @@ function start(room) {
   room.log = [];
   refill(room, 'chance');
   refill(room, 'chest');
+  const used = new Set();
+  room.players.forEach((player, index) => {
+    if (!TOKENS.includes(player.piece) || used.has(player.piece)) {
+      player.piece = TOKENS.find((token) => !used.has(token)) || TOKENS[index % TOKENS.length];
+    }
+    used.add(player.piece);
+  });
   room.turn = room.settings.firstTurn === 'random' ? crypto.randomInt(room.players.length) : 0;
   room.step = 'roll';
   room.players[room.turn].turnAt = Date.now();
@@ -816,6 +870,7 @@ function view(room, token) {
     housesLeft: room.housesLeft,
     hotelsLeft: room.hotelsLeft,
     settings: room.settings,
+    tokens: TOKENS,
     log: room.log.slice(-20),
     players: room.players.map((player) => ({
       id: player.id,
@@ -870,7 +925,7 @@ function chanceCards() {
     { text: 'Вернитесь на 3 клетки назад.', run: (room, player) => {
       const from = player.pos;
       player.pos = (from + 37) % 40;
-      room.move = { id: room.diceId + 9, from, to: player.pos };
+      pushMove(room, player, from, backPath(from, 3));
       land(room, player);
     } },
     { text: 'Отправляйтесь в тюрьму. Старт не проходите.', run: (room, player) => sendJail(room, player, 'карта') },

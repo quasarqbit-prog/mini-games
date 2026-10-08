@@ -2118,7 +2118,7 @@ body.in-cinema #view {
 
 body.in-mono #view { width: min(1280px, calc(100% - 16px)); }
 body.in-game.in-mono #view { width: 100%; max-width: none; padding: 0; }
-body.in-game.in-mono .top { display: none; }
+body.in-game.in-mono > header.top { display: none; }
 
 .mono, .mono-log, .mono-side, .mono-dock { min-width: 0; min-height: 0; }
 .mono {
@@ -2155,12 +2155,13 @@ body.in-game.in-mono .top { display: none; }
 }
 .mono-zoom { flex: 1; min-height: 0; overflow: hidden; display: grid; place-items: center; touch-action: none; container-type: size; }
 .mono-board {
+  position: relative;
   width: min(100cqw, 100cqh, 78vh);
   height: min(100cqw, 100cqh, 78vh);
   aspect-ratio: 1;
   display: grid;
-  grid-template-columns: 1.7fr repeat(9, 1fr) 1.7fr;
-  grid-template-rows: 1.7fr repeat(9, 1fr) 1.7fr;
+  grid-template-columns: minmax(0, 1.7fr) repeat(9, minmax(0, 1fr)) minmax(0, 1.7fr);
+  grid-template-rows: minmax(0, 1.7fr) repeat(9, minmax(0, 1fr)) minmax(0, 1.7fr);
   gap: 2px;
   padding: 2px;
   background: #145c38;
@@ -2180,12 +2181,15 @@ body.in-game.in-mono .top { display: none; }
   line-height: 1.05;
   font-weight: 800;
 }
-.cell.top { justify-content: flex-start; }
-.cell .swatch { display: block; height: 8px; margin: -2px -2px 2px; }
-.cell.top .swatch { order: 2; margin: 2px -2px -2px; }
-.cell.left .swatch, .cell.right .swatch { position: absolute; top: 0; bottom: 0; width: 8px; height: auto; margin: 0; }
-.cell.left .swatch { right: 0; }
-.cell.right .swatch { left: 0; }
+.cell.north { justify-content: flex-start; padding-bottom: 12px; }
+.cell.bottom { padding-top: 12px; }
+.cell.left { padding-right: 12px; }
+.cell.right { padding-left: 12px; }
+.cell .swatch { position: absolute; left: 0; right: 0; top: 0; height: 12px; margin: 0; }
+.cell.north .swatch { top: auto; bottom: 0; }
+.cell.left .swatch, .cell.right .swatch { top: 0; bottom: 0; width: 12px; height: auto; }
+.cell.left .swatch { left: auto; right: 0; }
+.cell.right .swatch { left: 0; right: auto; }
 .cell.here { outline: 2px solid #fff; outline-offset: -2px; }
 .cell.mortgaged { filter: grayscale(.7); }
 .cell > span:not(.tokens) {
@@ -2205,19 +2209,40 @@ body.in-game.in-mono .top { display: none; }
 .builds { display: flex; gap: 1px; }
 .house, .hotel { width: 5px; height: 5px; background: #2f8f4e; display: block; }
 .hotel { width: 10px; background: #c4482a; color: transparent; }
-.tokens { display: flex; gap: 1px; min-height: 10px; }
-.tokens i {
-  width: 12px;
-  height: 12px;
+.pieces { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
+.piece {
+  position: absolute;
+  width: 28px;
+  height: 28px;
+  margin: -16px 0 0 -14px;
   border-radius: 50%;
   display: grid;
   place-items: center;
   font-style: normal;
-  font-size: 8px;
+  font-size: 18px;
+  line-height: 1;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  transition: none;
 }
+.piece[data-ready] { transition: left .16s linear, top .16s linear; }
+.piece-pick { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.piece-pick span { color: var(--muted); font-size: 13px; }
+.piece-pick button {
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #211c18;
+  font-size: 22px;
+}
+.piece-pick button.on { outline: 2px solid var(--coral); }
+.piece-pick button:disabled { opacity: .35; }
 .mono-center {
   grid-column: 2 / 11;
   grid-row: 2 / 11;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   align-items: center;

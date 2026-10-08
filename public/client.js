@@ -1298,7 +1298,7 @@ document.addEventListener('click', (event) => {
       act: el.dataset.op,
       tile: el.dataset.tile,
       amount: el.dataset.amount || document.querySelector('.mono-bid')?.value,
-      to: el.dataset.to,
+      piece: el.dataset.piece || '',
     });
     return;
   }
