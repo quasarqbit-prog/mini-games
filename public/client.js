@@ -514,6 +514,7 @@ function adminHomeHtml() {
   const rows = modReports.map((item) => `
     <li>
       <b>${escapeHtml(item.ip || 'без IP')}</b>
+      ${item.name && item.name !== item.ip ? `<em>${escapeHtml(item.name)}</em>` : ''}
       <span>${escapeHtml(item.message || 'Мод прислал этот IP.')}</span>
       <small>${escapeHtml(chatStamp(item.at))}</small>
     </li>`).join('');
@@ -1201,7 +1202,8 @@ function resultHtml() {
 function modReportLine() {
   const last = modReports.at(-1);
   if (!last) return '<p class="note">Мод ещё ничего не присылал.</p>';
-  return `<p>Мод: <strong>${escapeHtml(last.ip || 'без IP')}</strong> ${escapeHtml(last.message || '')}</p>`;
+  const name = last.name && last.name !== last.ip ? ` (${last.name})` : '';
+  return `<p>Мод: <strong>${escapeHtml(last.ip || 'без IP')}</strong>${escapeHtml(name)} ${escapeHtml(last.message || '')}</p>`;
 }
 
 function adminMenuHtml() {

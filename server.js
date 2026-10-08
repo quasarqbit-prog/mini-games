@@ -2,6 +2,8 @@ const express = require('express');
 const http = require('http');
 const path = require('path');
 const crypto = require('crypto');
+const dns = require('dns');
+const net = require('net');
 const { Readable } = require('stream');
 const { Server } = require('socket.io');
 const mono = require('./monopoly');
@@ -61,7 +63,42 @@ function cleanModText(raw, max) {
 }
 
 function modReportView() {
-  return modReports.map((item) => ({ ip: item.ip, message: item.message, at: item.at }));
+  return modReports.map((item) => ({ ip: item.ip, name: item.name || '', message: item.message, at: item.at }));
+}
+
+function hostOf(raw) {
+  const value = String(raw || '').trim();
+  if (value.startsWith('[')) {
+    const end = value.indexOf(']');
+    if (end > 1) return value.slice(1, end);
+  }
+  if (net.isIP(value)) return value;
+  const colon = value.lastIndexOf(':');
+  if (colon > 0 && value.indexOf(':') === colon && /^\d{1,5}$/.test(value.slice(colon + 1))) {
+    return value.slice(0, colon);
+  }
+  return value;
+}
+
+function within(promise, ms) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('timeout')), ms);
+    promise.then((value) => {
+      clearTimeout(timer);
+      resolve(value);
+    }, (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
+
+async function numericAddress(raw) {
+  const host = hostOf(raw);
+  if (!host || net.isIP(host)) return host;
+  const records = await within(dns.promises.lookup(host, { all: true, verbatim: true }), 2500);
+  const picked = records.find((item) => item.family === 4) || records[0];
+  return picked?.address || '';
 }
 
 function pushModReport() {
@@ -90,7 +127,7 @@ function readModFields(req) {
   };
 }
 
-function takeModReport(req, res) {
+async function takeModReport(req, res) {
   res.set('Cache-Control', 'no-store');
   const { ip, message } = readModFields(req);
   if (!ip && !message && req.method === 'GET') {
@@ -100,14 +137,26 @@ function takeModReport(req, res) {
   if (keyState === 'missing') return res.status(503).json({ ok: false, error: 'Ключ мода не настроен' });
   if (keyState === 'bad') return res.status(401).json({ ok: false, error: 'Неверный ключ' });
   if (!ip && !message) return res.status(400).json({ ok: false, error: 'Нужен ip или message' });
-  if (ip && !/^[A-Za-z0-9.:[\]_-]{2,64}$/.test(ip)) return res.status(400).json({ ok: false, error: 'Не похоже на IP' });
+  if (ip && !/^[A-Za-z0-9.:[\]_-]{2,80}$/.test(ip)) return res.status(400).json({ ok: false, error: 'Не похоже на IP' });
   const now = Date.now();
   if (now - modReportAt < 1000) return res.status(429).json({ ok: false, error: 'Слишком часто' });
   modReportAt = now;
-  modReports.push({ ip, message, at: now });
+  const host = hostOf(ip);
+  let shown = ip;
+  let name = '';
+  if (host && !net.isIP(host)) {
+    name = host;
+    try {
+      const resolved = await numericAddress(ip);
+      if (resolved && net.isIP(resolved)) shown = resolved;
+    } catch {
+      shown = ip;
+    }
+  }
+  modReports.push({ ip: shown, name, message, at: now });
   if (modReports.length > 12) modReports.splice(0, modReports.length - 12);
   pushModReport();
-  res.json({ ok: true });
+  res.json({ ok: true, ip: shown });
 }
 
 function modIngress(req, res, next) {
@@ -127,7 +176,11 @@ app.use('/api/minecraft', (req, res, next) => {
     res.set('Allow', 'GET, POST');
     return res.status(405).json({ ok: false, error: 'Нужен GET или POST' });
   }
-  modIngress(req, res, () => takeModReport(req, res));
+  modIngress(req, res, () => {
+    takeModReport(req, res).catch(() => {
+      if (!res.headersSent) res.status(500).json({ ok: false, error: 'Не удалось принять' });
+    });
+  });
 });
 
 const rooms = new Map();

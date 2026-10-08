@@ -468,6 +468,14 @@ async function main() {
   await new Promise((resolve) => setTimeout(resolve, 1100));
   const viaQuery = await fetch(`${modUrl}?key=${encodeURIComponent('smoke-mod-key')}&ip=198.51.100.8&message=${encodeURIComponent('из игры')}`);
   assert(viaQuery.status === 200, `mod api accepts a browser-style link: ${viaQuery.status}`);
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+  const resolved = await fetch(modUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: 'Bearer smoke-mod-key' },
+    body: JSON.stringify({ ip: 'localhost', message: 'имя' }),
+  });
+  const resolvedBody = await resolved.json();
+  assert(resolved.status === 200 && resolvedBody.ip === '127.0.0.1', `mod api resolves a hostname: ${resolved.status} ${resolvedBody.ip}`);
 
   console.log('smoke ok', created.code);
 
