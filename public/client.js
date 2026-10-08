@@ -87,6 +87,7 @@ let dmDraft = '';
 let inviteOpen = false;
 let pendingJoin = '';
 let mailReady = false;
+let modReports = [];
 function toast(text) {
   const el = document.createElement('div');
   el.className = 'toast';
@@ -508,6 +509,22 @@ function paintInvite() {
     </div>`);
 }
 
+function adminHomeHtml() {
+  if (!isLocalAdmin()) return '';
+  const rows = modReports.map((item) => `
+    <li>
+      <b>${escapeHtml(item.ip || 'без IP')}</b>
+      <span>${escapeHtml(item.message || 'Мод прислал этот IP.')}</span>
+      <small>${escapeHtml(chatStamp(item.at))}</small>
+    </li>`).join('');
+  return `
+    <section class="admin-home">
+      <h2>Админ</h2>
+      <p class="note">Сообщение от мода Minecraft</p>
+      ${rows ? `<ul>${rows}</ul>` : '<p class="note">Мод ещё ничего не присылал.</p>'}
+    </section>`;
+}
+
 function homeHtml() {
   if ((inviteCode || booting) && !state) {
     return `
@@ -517,6 +534,7 @@ function homeHtml() {
   }
   return `
     <section class="home">
+      ${adminHomeHtml()}
       <p class="lead">Открой Wordle, морской бой, кинотеатр или монополию и скинь ссылку другу. Он попадёт в ту же комнату.</p>
       <form class="join" data-act="join">
         <label for="room-code">Код комнаты</label>
@@ -1180,6 +1198,12 @@ function resultHtml() {
     </section>`;
 }
 
+function modReportLine() {
+  const last = modReports.at(-1);
+  if (!last) return '<p class="note">Мод ещё ничего не присылал.</p>';
+  return `<p>Мод: <strong>${escapeHtml(last.ip || 'без IP')}</strong> ${escapeHtml(last.message || '')}</p>`;
+}
+
 function adminMenuHtml() {
   if (!adminOpen || !isLocalAdmin()) return '';
   let body = '<p class="note">F2 закрывает меню.</p>';
@@ -1197,7 +1221,7 @@ function adminMenuHtml() {
     const word = state.secretWord ? String(state.secretWord).toUpperCase() : '';
     body = `<p>Слово соперника: <strong>${word ? escapeHtml(word) : 'ещё не загадано'}</strong></p>`;
   }
-  return `<aside class="admin-menu"><h3>ADMIN</h3>${body}</aside>`;
+  return `<aside class="admin-menu"><h3>ADMIN</h3>${modReportLine()}${body}</aside>`;
 }
 
 function paintAdminMenu() {
@@ -1734,6 +1758,12 @@ socket.on('hello', (payload) => {
     booting = false;
     if (!state) render();
   }
+});
+
+socket.on('mod-report', (list) => {
+  modReports = Array.isArray(list) ? list : [];
+  if (!state && !booting) render();
+  else if (adminOpen) paintAdminMenu();
 });
 
 socket.on('online', (list) => {

@@ -37,7 +37,7 @@ let child;
 async function main() {
   child = spawn(process.execPath, ['server.js'], {
     cwd: path.join(__dirname, '..'),
-    env: { ...process.env, PORT: String(port) },
+    env: { ...process.env, PORT: String(port), MINECRAFT_MOD_KEY: 'smoke-mod-key' },
     stdio: 'inherit',
   });
   const stop = (code) => {
@@ -442,6 +442,26 @@ async function main() {
   await writer.when((s) => s.players.length === 2, 'invite accepted');
   writer.close();
   reader.close();
+
+  const modUrl = `http://127.0.0.1:${port}/api/minecraft`;
+  const locked = await fetch(modUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ip: '203.0.113.10', message: 'без ключа' }),
+  });
+  assert(locked.status === 401, `mod api rejects a missing key: ${locked.status}`);
+  const accepted = await fetch(modUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: 'Bearer smoke-mod-key' },
+    body: JSON.stringify({ ip: '203.0.113.10', message: 'сервер открыт' }),
+  });
+  assert(accepted.status === 200, `mod api accepts the key: ${accepted.status}`);
+  const junk = await fetch(modUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-mod-key': 'smoke-mod-key' },
+    body: JSON.stringify({ ip: 'not an ip', message: 'мимо' }),
+  });
+  assert(junk.status === 400, `mod api rejects a bad ip: ${junk.status}`);
 
   console.log('smoke ok', created.code);
 

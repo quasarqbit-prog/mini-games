@@ -49,6 +49,50 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true, rooms: rooms.size });
 });
 
+const MOD_KEY = String(process.env.MINECRAFT_MOD_KEY || '');
+const modReports = [];
+let modReportAt = 0;
+
+function cleanModText(raw, max) {
+  return String(raw || '')
+    .replace(/[\u0000-\u001F\u007F-\u009F\u202A-\u202E\u2066-\u2069]/g, '')
+    .trim()
+    .slice(0, max);
+}
+
+function modReportView() {
+  return modReports.map((item) => ({ ip: item.ip, message: item.message, at: item.at }));
+}
+
+function pushModReport() {
+  const view = modReportView();
+  for (const socket of io.sockets.sockets.values()) {
+    if (isAdmin(socket.data.token)) socket.emit('mod-report', view);
+  }
+}
+
+app.post('/api/minecraft', express.json({ limit: '8kb' }), (req, res) => {
+  if (!MOD_KEY) return res.status(503).json({ ok: false, error: 'Ключ мода не настроен' });
+  const header = String(req.get('authorization') || '');
+  const key = header.startsWith('Bearer ') ? header.slice(7).trim() : String(req.get('x-mod-key') || '').trim();
+  const given = Buffer.from(key);
+  const expect = Buffer.from(MOD_KEY);
+  if (given.length !== expect.length || !crypto.timingSafeEqual(given, expect)) {
+    return res.status(401).json({ ok: false, error: 'Неверный ключ' });
+  }
+  const ip = cleanModText(req.body?.ip, 64);
+  const message = cleanModText(req.body?.message, 400);
+  if (!ip && !message) return res.status(400).json({ ok: false, error: 'Нужен ip или message' });
+  if (ip && !/^[0-9a-fA-F:.[\]]{2,64}$/.test(ip)) return res.status(400).json({ ok: false, error: 'Не похоже на IP' });
+  const now = Date.now();
+  if (now - modReportAt < 1000) return res.status(429).json({ ok: false, error: 'Слишком часто' });
+  modReportAt = now;
+  modReports.push({ ip, message, at: now });
+  if (modReports.length > 12) modReports.splice(0, modReports.length - 12);
+  pushModReport();
+  res.json({ ok: true });
+});
+
 const rooms = new Map();
 const profiles = new Map();
 const presence = new Map();
@@ -1250,6 +1294,7 @@ io.on('connection', (socket) => {
   notePresence(socket);
   const existing = findByToken(socket.data.token);
   socket.emit('hello', { token: socket.data.token, inRoom: Boolean(existing), ...identity(socket.data.token) });
+  if (isAdmin(socket.data.token)) socket.emit('mod-report', modReportView());
   broadcastOnline();
   if (existing) attach(socket, existing);
 
