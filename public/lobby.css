@@ -11,6 +11,22 @@ body.in-hub .top {
   display: none;
 }
 
+#onboard {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  padding: 18px 22px 28px;
+}
+
+#onboard[hidden] {
+  display: none;
+}
+
+#onboard .gate {
+  margin: auto;
+}
+
 .gate {
   width: min(440px, 100%);
   display: flex;
@@ -469,15 +485,17 @@ button.slot-plus:active {
 }
 
 .pick-icon {
-  width: 72px;
-  height: 72px;
+  width: 84px;
+  height: 84px;
   display: grid;
   place-items: center;
+  border: 3px solid var(--mark);
+  background: #000;
 }
 
 .pick-icon img {
-  width: 72px;
-  height: 72px;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
   image-rendering: pixelated;
 }

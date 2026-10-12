@@ -1306,6 +1306,25 @@ function playingGame() {
   return Boolean(state && state.phase && state.phase !== 'lobby');
 }
 
+function paintGateBar() {
+  const slot = document.getElementById('gate-you');
+  if (!slot) return;
+  const typed = document.getElementById('onboard-name')?.value.replace(/\s+/g, ' ').trim() || '';
+  const name = typed || profile.name || '';
+  const image = document.getElementById('onboard-avatar');
+  const avatar = image && !image.hidden && image.getAttribute('src') ? image.getAttribute('src') : (profile.avatar || '');
+  const face = avatar
+    ? `<img draggable="false" src="${escapeHtml(avatar)}" alt="">`
+    : `<span>${escapeHtml((name || shownUserId() || '?').trim().slice(0, 1).toUpperCase() || '?')}</span>`;
+  slot.innerHTML = `
+    <div>
+      <b>${escapeHtml(name || '—')}</b>
+      <small>${escapeHtml(shownUserId() || '')}</small>
+    </div>
+    <span class="hub-avatar">${face}</span>`;
+}
+window.leisurePaintGate = paintGateBar;
+
 function renderFront() {
   if (booting && !hub) return;
   const onboard = document.getElementById('onboard');
@@ -1327,6 +1346,7 @@ function renderFront() {
   if (onboard) onboard.hidden = false;
   view.innerHTML = '';
   renderHeader();
+  paintGateBar();
 }
 
 function render() {
@@ -1895,6 +1915,7 @@ socket.on('identity', (payload) => {
   localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
   if (profileDraft) profileDraft.userId = payload.userId;
   renderHeader();
+  paintGateBar();
   if (profileOpen) renderModal();
 });
 

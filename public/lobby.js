@@ -1,9 +1,9 @@
 (function lobbyShell() {
   const ICONS = {
-    wordle: '/assets/wordle.png',
-    battle: '/assets/sea_war.png',
-    cinema: '/assets/cinema.png',
-    mono: '/assets/monopoly.png',
+    wordle: '/assets/wordle.png?v=2',
+    battle: '/assets/sea_war.png?v=2',
+    cinema: '/assets/cinema.png?v=2',
+    mono: '/assets/monopoly.png?v=2',
   };
   const GAMES = ['wordle', 'battle', 'cinema', 'mono'];
   let page = 0;
@@ -245,9 +245,14 @@
 
   document.addEventListener('click', (event) => {
     const el = event.target.closest('[data-hub]');
-    const socket = window.leisureSocket;
-    if (!el || !socket) return;
+    if (!el) return;
     const act = el.dataset.hub;
+    if (act === 'profile') {
+      window.leisureProfile?.();
+      return;
+    }
+    const socket = window.leisureSocket;
+    if (!socket) return;
     if (act === 'invite-hold') return;
     if (act === 'invite-close' || act === 'invite-dismiss') {
       if (act === 'invite-close' && event.target !== el) return;
@@ -276,10 +281,6 @@
       motion = null;
       page = index;
       paint();
-      return;
-    }
-    if (act === 'profile') {
-      window.leisureProfile?.();
       return;
     }
     if (act === 'choose') {

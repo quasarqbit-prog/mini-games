@@ -14,12 +14,20 @@
     return Math.max(60, Math.min(190, Math.round(area / 12000)));
   }
 
+  function wrap(value, size) {
+    const span = size + maxDistance * 2;
+    const min = -maxDistance;
+    const max = size + maxDistance;
+    if (span <= 0 || (value >= min && value <= max)) return value;
+    return min + (((value - min) % span) + span) % span;
+  }
+
   function spawn() {
     const angle = Math.random() * Math.PI * 2;
     const speed = 0.12 + Math.random() * 0.28;
     return {
-      x: Math.random() * width,
-      y: Math.random() * height,
+      x: -maxDistance + Math.random() * (width + maxDistance * 2),
+      y: -maxDistance + Math.random() * (height + maxDistance * 2),
       vx: Math.cos(angle) * speed,
       vy: Math.sin(angle) * speed,
       r: 1.5 + Math.random() * 1.5,
@@ -48,12 +56,8 @@
   function frame() {
     ctx.clearRect(0, 0, width, height);
     for (const dot of particles) {
-      dot.x += dot.vx;
-      dot.y += dot.vy;
-      if (dot.x < 0) dot.x += width;
-      if (dot.y < 0) dot.y += height;
-      if (dot.x > width) dot.x -= width;
-      if (dot.y > height) dot.y -= height;
+      dot.x = wrap(dot.x + dot.vx, width);
+      dot.y = wrap(dot.y + dot.vy, height);
     }
 
     const color = ink();

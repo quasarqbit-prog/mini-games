@@ -296,11 +296,12 @@
       image.src = draftAvatar;
       image.hidden = false;
       letter.hidden = true;
-      return;
+    } else {
+      image.hidden = true;
+      letter.hidden = false;
+      letter.textContent = (name.trim().slice(0, 1) || '?').toUpperCase();
     }
-    image.hidden = true;
-    letter.hidden = false;
-    letter.textContent = (name.trim().slice(0, 1) || '?').toUpperCase();
+    window.leisurePaintGate?.();
   }
 
   function mount(nextHooks) {
@@ -340,9 +341,6 @@
       if (!file || !hooks?.pixelAvatar) return;
       draftAvatar = await hooks.pixelAvatar(file);
       paintDraft();
-    });
-    document.getElementById('onboard-lang')?.addEventListener('click', () => {
-      applyLang(lang === 'ru' ? 'en' : 'ru');
     });
     document.getElementById('onboard-form')?.addEventListener('submit', (event) => {
       event.preventDefault();
