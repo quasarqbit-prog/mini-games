@@ -611,6 +611,8 @@ function hubView(hub, token) {
   return {
     code: hub.code,
     game: hub.game || '',
+    youHost: hub.host === token,
+    settings: sanitizeSettings(hub.settings),
     slots: hub.slots.map((slot) => (
       slot
         ? { ...hubMember(slot), host: slot === hub.host, you: slot === token }
@@ -1534,6 +1536,7 @@ io.on('connection', (socket) => {
       code: makeHubCode(),
       host: socket.data.token,
       game: '',
+      settings: defaultSettings(),
       slots: [socket.data.token, null, null, null, null, null],
     };
     hubs.set(hub.code, hub);
@@ -1573,6 +1576,38 @@ io.on('connection', (socket) => {
     if (!hub || !HUB_GAMES.has(game)) return;
     hub.game = game;
     broadcastHub(hub);
+  });
+
+  socket.on('hub:config', ({ settings } = {}) => {
+    const hub = hubByToken(socket.data.token);
+    if (!hub || hub.host !== socket.data.token) return fail(socket, 'Настройки меняет хост');
+    hub.settings = sanitizeSettings({ ...sanitizeSettings(hub.settings), ...(settings || {}) });
+    broadcastHub(hub);
+  });
+
+  socket.on('hub:move', ({ from, to } = {}) => {
+    const hub = hubByToken(socket.data.token);
+    if (!hub || hub.host !== socket.data.token) return fail(socket, 'Перемещает только хост');
+    const source = Number(from);
+    const target = Number(to);
+    if (!Number.isInteger(source) || !Number.isInteger(target)) return;
+    if (source < 0 || target < 0 || source >= hub.slots.length || target >= hub.slots.length || source === target) return;
+    if (!hub.slots[source]) return;
+    const next = hub.slots.slice();
+    const moving = next[source];
+    next[source] = next[target];
+    next[target] = moving;
+    hub.slots = next;
+    broadcastHub(hub);
+  });
+
+  socket.on('hub:start', () => {
+    const hub = hubByToken(socket.data.token);
+    if (!hub || hub.host !== socket.data.token) return fail(socket, 'Начать может только хост');
+    if (!hub.game) return fail(socket, 'Сначала выбери игру');
+    const duo = hub.game === 'wordle' || hub.game === 'battle';
+    if (duo && (!hub.slots[0] || !hub.slots[1])) return fail(socket, 'Нужны два игрока на игровых местах');
+    if (!duo && hub.slots.filter(Boolean).length < 2) return fail(socket, 'Нужны хотя бы два человека');
   });
 
   socket.on('hub:invite', ({ id } = {}) => {

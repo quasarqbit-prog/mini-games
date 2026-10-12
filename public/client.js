@@ -261,6 +261,14 @@ function tr(key, fallback) {
   return value && value !== key ? value : fallback;
 }
 
+function toggleProfile() {
+  profileOpen = !profileOpen;
+  profileDraft = profileOpen ? { name: profile.name, avatar: profile.avatar, userId: shownUserId() } : null;
+  profileTab = 'profile';
+  renderModal();
+}
+window.leisureProfile = toggleProfile;
+
 function renderHeader() {
   headerSlot.innerHTML = `
     <button type="button" class="profile-chip" data-act="profile">
@@ -1555,12 +1563,7 @@ document.addEventListener('click', (event) => {
     if (key === 'timerOn' || key === 'hidden') value = value === '1';
     socket.emit('settings', { ...state.settings, [key]: value });
   }
-  if (act === 'profile') {
-    profileOpen = !profileOpen;
-    profileDraft = profileOpen ? { name: profile.name, avatar: profile.avatar, userId: shownUserId() } : null;
-    profileTab = 'profile';
-    renderModal();
-  }
+  if (act === 'profile') toggleProfile();
   if (act === 'profile-tab' && profileDraft) {
     const typed = document.querySelector('.profile-name');
     const id = document.querySelector('.profile-public-id');

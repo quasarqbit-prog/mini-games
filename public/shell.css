@@ -153,13 +153,13 @@ h1, h2, h3, .brand, .code-value {
 }
 
 .account-panel {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 12px;
+  position: fixed;
+  top: 64px;
+  right: 16px;
   width: min(360px, calc(100vw - 16px));
   max-height: min(72vh, 560px);
   overflow: auto;
-  z-index: 30;
+  z-index: 90;
   padding: 12px;
   background: var(--card);
   border: 3px solid var(--mark);

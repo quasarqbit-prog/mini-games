@@ -127,6 +127,20 @@ body.in-hub .top {
   display: flex;
   align-items: center;
   gap: 10px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+
+.hub-you:hover,
+.hub-you:active {
+  transform: none;
+  filter: none;
+  box-shadow: none;
 }
 
 .hub-you div {
@@ -176,6 +190,7 @@ body.in-hub .top {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  overflow: auto;
 }
 
 .slot {
@@ -306,6 +321,13 @@ button.slot-plus:active {
   gap: 22px;
   align-items: center;
   justify-content: center;
+  overflow: auto;
+}
+
+.hub-pick.is-setup {
+  grid-template-columns: minmax(280px, 560px);
+  align-items: start;
+  justify-content: start;
 }
 
 .pick-col {
@@ -366,8 +388,84 @@ button.slot-plus:active {
   gap: 8px;
 }
 
+.pick-col > .act,
 .pick-nav .act {
   width: 100%;
+}
+
+.slot-split {
+  margin: 10px 0 2px;
+  padding-top: 10px;
+  border-top: 2px solid rgba(255, 255, 255, 0.28);
+  color: var(--mark);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+}
+
+.slot-split:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.slot[draggable="true"] { cursor: grab; }
+
+.mode-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(520px, 100%);
+}
+
+.mode-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.mode-actions .act { width: 100%; }
+
+.mode-field p,
+.mode-note { margin: 0 0 8px; }
+
+.mode-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.mode-opt {
+  border: 2px solid var(--mark);
+  background: transparent;
+  color: var(--text);
+  padding: 8px 10px;
+  box-shadow: none;
+}
+
+.mode-opt.on {
+  background: var(--mark);
+  color: var(--bg);
+}
+
+.mode-opt,
+.mode-opt:hover,
+.mode-opt:active {
+  transform: none;
+  filter: none;
+  box-shadow: none;
+}
+
+.mode-num,
+.mode-time {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.mode-num input,
+.mode-time input {
+  width: 72px;
 }
 
 .pick-icon {
