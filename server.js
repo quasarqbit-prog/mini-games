@@ -626,6 +626,9 @@ function hubView(hub, token) {
   return {
     code: hub.code,
     game: hub.game || '',
+    page: Number.isInteger(hub.page) ? hub.page : 0,
+    slide: Boolean(hub.slide),
+    setup: Boolean(hub.setup),
     youHost: hub.host === token,
     settings: sanitizeSettings(hub.settings),
     slots: hub.slots.map((slot) => (
@@ -1551,6 +1554,8 @@ io.on('connection', (socket) => {
       code: makeHubCode(),
       host: socket.data.token,
       game: '',
+      page: 0,
+      setup: false,
       settings: defaultSettings(),
       slots: [socket.data.token],
     };
@@ -1581,10 +1586,30 @@ io.on('connection', (socket) => {
     socket.emit('hub', null);
   });
 
+  socket.on('hub:page', ({ page, slide } = {}) => {
+    const hub = hubByToken(socket.data.token);
+    if (!hub || hub.host !== socket.data.token) return;
+    const index = Number(page);
+    if (!Number.isInteger(index) || index < 0 || index > 3) return;
+    hub.page = index;
+    hub.slide = Boolean(slide);
+    broadcastHub(hub);
+    hub.slide = false;
+  });
+
   socket.on('hub:game', ({ game } = {}) => {
     const hub = hubByToken(socket.data.token);
-    if (!hub || !HUB_GAMES.has(game)) return;
+    if (!hub || hub.host !== socket.data.token || !HUB_GAMES.has(game)) return;
     hub.game = game;
+    hub.setup = true;
+    hub.page = ['wordle', 'battle', 'cinema', 'mono'].indexOf(game);
+    broadcastHub(hub);
+  });
+
+  socket.on('hub:back', () => {
+    const hub = hubByToken(socket.data.token);
+    if (!hub || hub.host !== socket.data.token) return;
+    hub.setup = false;
     broadcastHub(hub);
   });
 

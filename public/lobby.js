@@ -7,7 +7,6 @@
   };
   const GAMES = ['wordle', 'battle', 'cinema', 'mono'];
   let page = 0;
-  let configuring = false;
   let inviteOpen = false;
   let inviteUsed = false;
   let motion = null;
@@ -86,15 +85,17 @@
 
   function opt(settings, key, value, label) {
     const on = String(settings[key]) === String(value) ? ' on' : '';
+    if (!last?.hub?.youHost) return `<span class="mode-opt${on}">${escapeHtml(label)}</span>`;
     return `<button type="button" class="mode-opt${on}" data-hub="opt" data-key="${key}" data-value="${value}">${escapeHtml(label)}</button>`;
   }
 
   function modeHtml(hub) {
     const settings = hub.settings || {};
+    const lock = hub.youHost ? '' : ' disabled';
     const actions = `
       <div class="mode-actions">
-        <button type="button" class="act" data-hub="begin">${escapeHtml(tr('hub.begin', 'Начать'))}</button>
-        <button type="button" class="act" data-hub="back">${escapeHtml(tr('hub.back', 'Вернуться'))}</button>
+        <button type="button" class="act" data-hub="begin"${lock}>${escapeHtml(tr('hub.begin', 'Начать'))}</button>
+        <button type="button" class="act" data-hub="back"${lock}>${escapeHtml(tr('hub.back', 'Вернуться'))}</button>
       </div>`;
     if (hub.game === 'cinema') {
       return `${actions}<p class="mode-note">${escapeHtml(tr('hub.cinema.note', 'Для кинотеатра отдельных настроек нет.'))}</p>`;
@@ -107,13 +108,13 @@
         </div>`;
     }
     const length = settings.lengthMode === 'exact' || settings.lengthMode === 'max'
-      ? `<label class="mode-num">${escapeHtml(tr('hub.letters', 'Букв'))} <input data-hub-num="length" type="number" min="3" max="16" value="${Number(settings.length) || 5}"></label>`
+      ? `<label class="mode-num">${escapeHtml(tr('hub.letters', 'Букв'))} <input data-hub-num="length" type="number" min="3" max="16" value="${Number(settings.length) || 5}"${hub.youHost ? '' : ' disabled'}></label>`
       : '';
     const time = settings.timerOn
       ? `<div class="mode-time">
-          <input data-hub-num="minutes" type="number" min="0" max="5" value="${Number(settings.minutes) || 0}">
+          <input data-hub-num="minutes" type="number" min="0" max="5" value="${Number(settings.minutes) || 0}"${hub.youHost ? '' : ' disabled'}>
           <span>:</span>
-          <input data-hub-num="seconds" type="number" min="0" max="60" value="${Number(settings.seconds) || 0}">
+          <input data-hub-num="seconds" type="number" min="0" max="60" value="${Number(settings.seconds) || 0}"${hub.youHost ? '' : ' disabled'}>
         </div>`
       : '';
     return `${actions}
@@ -143,7 +144,7 @@
       <div class="pick-icon"><img src="${ICONS[id]}" alt=""></div>
       <h2>${escapeHtml(gameTitle(id))}</h2>
       <p>${escapeHtml(tr(`game.${id}.text`, ''))}</p>
-      <button type="button" class="act" data-hub="choose" data-game="${id}">${escapeHtml(tr(chosen ? 'hub.chosen' : 'hub.choose', chosen ? 'Выбрано' : 'Выбрать'))}</button>`;
+      <button type="button" class="act" data-hub="choose" data-game="${id}"${last?.hub?.youHost ? '' : ' disabled'}>${escapeHtml(tr(chosen ? 'hub.chosen' : 'hub.choose', chosen ? 'Выбрано' : 'Выбрать'))}</button>`;
   }
 
   function inviteLayer(hub, online) {
@@ -200,24 +201,28 @@
           <div class="hub-slots hub-frame">
             ${slotsBlock(hub)}
           </div>
-          <div class="hub-pick hub-frame${configuring && hub.game ? ' is-setup' : ''}">
-            ${configuring && hub.game ? `<div class="mode-setup">${modeHtml(hub)}</div>` : `
+          ${hub.setup && hub.game ? `
+            <div class="setup-wrap">
+              ${hub.youHost ? '<button type="button" class="setup-x" data-hub="back" aria-label="Close">×</button>' : ''}
+              <div class="hub-pick hub-frame is-setup"><div class="mode-setup">${modeHtml(hub)}</div></div>
+            </div>` : `
+          <div class="hub-pick hub-frame">
             <div class="pick-col">
-              <button type="button" class="act" data-hub="page" data-dir="-1" aria-label="Previous">↑</button>
+              <button type="button" class="act" data-hub="page" data-dir="-1" aria-label="Previous"${hub.youHost ? '' : ' disabled'}>↑</button>
               <div class="pick-stage">
                 ${motion ? `<article class="pick-card fly ${leaveClass}">${cardHtml(GAMES[motion.from], hub)}</article>` : ''}
                 <article class="pick-card ${enterClass}">${cardHtml(game, hub)}</article>
               </div>
-              <button type="button" class="act" data-hub="page" data-dir="1" aria-label="Next">↓</button>
+              <button type="button" class="act" data-hub="page" data-dir="1" aria-label="Next"${hub.youHost ? '' : ' disabled'}>↓</button>
             </div>
             <div class="gems">
               ${GAMES.map((id, index) => `
-                <button type="button" class="gem-btn${index === page ? ' on' : ''}" data-hub="jump" data-index="${index}">
+                <button type="button" class="gem-btn${index === page ? ' on' : ''}" data-hub="jump" data-index="${index}"${hub.youHost ? '' : ' disabled'}>
                   <i class="gem${index === page ? ' on' : ''}"></i>
                   <span>${escapeHtml(gameTitle(id))}</span>
                 </button>`).join('')}
-            </div>`}
-          </div>
+            </div>
+          </div>`}
         </div>
         ${inviteLayer(hub, last.online)}
       </section>`;
@@ -283,30 +288,28 @@
       paint();
       return;
     }
+    if (!last?.hub?.youHost && ['page', 'jump', 'choose', 'back', 'begin', 'opt'].includes(act)) return;
     if (act === 'page') {
       if (motion) return;
       const dir = Number(el.dataset.dir) || 1;
-      motion = { dir, from: page };
-      page = (page + dir + GAMES.length) % GAMES.length;
-      paint();
+      socket.emit('hub:page', { page: (page + dir + GAMES.length) % GAMES.length, slide: true });
       return;
     }
     if (act === 'jump') {
       const index = Number(el.dataset.index);
       if (!Number.isInteger(index) || index === page || index < 0 || index >= GAMES.length) return;
-      motion = null;
-      page = index;
-      paint();
+      socket.emit('hub:page', { page: index, slide: false });
       return;
     }
     if (act === 'choose') {
-      configuring = true;
+      last.hub = { ...last.hub, game: el.dataset.game, setup: true };
       socket.emit('hub:game', { game: el.dataset.game });
       paint();
       return;
     }
     if (act === 'back') {
-      configuring = false;
+      last.hub = { ...last.hub, setup: false };
+      socket.emit('hub:back');
       paint();
       return;
     }
@@ -463,6 +466,15 @@
   window.LobbyShell = {
     render(root, hub, me, online) {
       bindSocket();
+      const nextPage = Number.isInteger(hub?.page) ? hub.page : 0;
+      if (last?.hub?.code === hub?.code && nextPage !== page) {
+        if (hub.slide) {
+          const forward = (nextPage - page + GAMES.length) % GAMES.length;
+          const back = (page - nextPage + GAMES.length) % GAMES.length;
+          motion = { dir: forward <= back ? 1 : -1, from: page };
+        } else motion = null;
+      }
+      page = nextPage;
       last = { root, hub, me, online };
       paint();
     },

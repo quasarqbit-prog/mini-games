@@ -303,10 +303,11 @@ function themeTabHtml() {
 }
 
 function renderModal() {
+  const pop = document.getElementById('account-pop');
   const panel = document.getElementById('account-panel');
   if (!panel) return;
   if (!profileOpen || !profileDraft) {
-    panel.hidden = true;
+    if (pop) pop.hidden = true;
     panel.innerHTML = '';
     return;
   }
@@ -354,7 +355,7 @@ function renderModal() {
         </label>
       </div>`;
   }
-  panel.hidden = false;
+  if (pop) pop.hidden = false;
   panel.className = 'account-panel';
   panel.innerHTML = `
     <div class="account-tabs">

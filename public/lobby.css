@@ -376,10 +376,38 @@ button.slot-plus:active {
   overflow: auto;
 }
 
+.setup-wrap {
+  position: relative;
+  justify-self: center;
+  align-self: center;
+  width: min(720px, 100%);
+  height: min(620px, 100%);
+  min-height: 520px;
+}
+
+.setup-x {
+  position: absolute;
+  top: -18px;
+  right: -18px;
+  z-index: 2;
+  width: 40px;
+  height: 40px;
+  border: 3px solid var(--mark);
+  background: var(--card);
+  color: var(--text);
+  box-shadow: 0 4px 0 2px #000;
+  font-size: 26px;
+  line-height: 1;
+  cursor: pointer;
+}
+
 .hub-pick.is-setup {
-  grid-template-columns: minmax(280px, 560px);
+  width: 100%;
+  height: 100%;
+  grid-template-columns: 1fr;
   align-items: start;
-  justify-content: start;
+  justify-content: stretch;
+  overflow: auto;
 }
 
 .pick-col {
@@ -465,8 +493,10 @@ button.slot-plus:active {
 .mode-setup {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  width: min(520px, 100%);
+  gap: 18px;
+  width: 100%;
+  min-height: 100%;
+  box-sizing: border-box;
 }
 
 .mode-actions {
@@ -487,11 +517,20 @@ button.slot-plus:active {
 }
 
 .mode-opt {
+  flex: 0 0 auto;
   border: 2px solid var(--mark);
   background: transparent;
   color: var(--text);
-  padding: 8px 10px;
+  padding: 12px 16px;
+  white-space: nowrap;
   box-shadow: none;
+}
+
+.hub-pick .act:disabled,
+.gem-btn:disabled,
+.mode-opt:disabled {
+  cursor: default;
+  opacity: 1;
 }
 
 .mode-opt.on {
