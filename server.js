@@ -240,6 +240,7 @@ app.use('/api/minecraft', (req, res, next) => {
 });
 
 const rooms = new Map();
+const hubs = new Map();
 const profiles = new Map();
 const presence = new Map();
 
@@ -248,7 +249,7 @@ function makeCode() {
   for (let i = 0; i < 5; i += 1) {
     code += CODE_ALPHABET[crypto.randomInt(CODE_ALPHABET.length)];
   }
-  return rooms.has(code) ? makeCode() : code;
+  return rooms.has(code) || hubs.has(code) ? makeCode() : code;
 }
 
 function normalizeWord(raw) {
@@ -557,6 +558,7 @@ function onlinePayload(forToken) {
   for (const [token, entry] of presence) {
     if (!entry.sockets.size) continue;
     list.push({
+      id: publicId(token),
       name: entry.name || '',
       avatar: entry.avatar || '',
       you: token === forToken,
@@ -571,6 +573,77 @@ function broadcastOnline() {
     socket.emit('online', onlinePayload(socket.data.token));
     socket.emit('mail', mailFor(socket.data.token));
   }
+}
+
+const HUB_GAMES = new Set(['wordle', 'battle', 'cinema', 'mono']);
+
+function makeHubCode() {
+  let code = '';
+  for (let i = 0; i < 5; i += 1) code += CODE_ALPHABET[crypto.randomInt(CODE_ALPHABET.length)];
+  return rooms.has(code) || hubs.has(code) ? makeHubCode() : code;
+}
+
+function normalizeHubCode(raw) {
+  return String(raw || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+}
+
+function hubByToken(token) {
+  for (const hub of hubs.values()) {
+    if (hub.slots.includes(token)) return hub;
+  }
+  return null;
+}
+
+function hubMember(token) {
+  const entry = presence.get(token);
+  const saved = profiles.get(token);
+  return {
+    name: entry?.name || saved?.name || '',
+    avatar: entry?.avatar || saved?.avatar || '',
+    id: publicId(token),
+  };
+}
+
+function hubView(hub, token) {
+  return {
+    code: hub.code,
+    game: hub.game || '',
+    slots: hub.slots.map((slot) => (
+      slot
+        ? { ...hubMember(slot), host: slot === hub.host, you: slot === token }
+        : { empty: true }
+    )),
+  };
+}
+
+function broadcastHub(hub) {
+  if (!hubs.has(hub.code)) return;
+  for (const slot of hub.slots) {
+    if (!slot) continue;
+    const entry = presence.get(slot);
+    if (!entry) continue;
+    for (const id of entry.sockets) {
+      const socket = io.sockets.sockets.get(id);
+      if (socket) socket.emit('hub', hubView(hub, slot));
+    }
+  }
+}
+
+function pullFromHub(hub, token) {
+  const index = hub.slots.indexOf(token);
+  if (index < 0) return;
+  hub.slots[index] = null;
+  if (hub.host === token) hub.host = hub.slots.find(Boolean) || '';
+  if (!hub.slots.some(Boolean)) hubs.delete(hub.code);
+  else broadcastHub(hub);
+}
+
+function tokenByPublicId(id) {
+  const clean = String(id || '');
+  for (const token of presence.keys()) {
+    if (publicId(token) === clean) return token;
+  }
+  return '';
 }
 
 const directThreads = new Map();
@@ -1439,10 +1512,97 @@ io.use((socket, next) => {
 io.on('connection', (socket) => {
   notePresence(socket);
   const existing = findByToken(socket.data.token);
-  socket.emit('hello', { token: socket.data.token, inRoom: Boolean(existing), ...identity(socket.data.token) });
+  const sitting = hubByToken(socket.data.token);
+  socket.emit('hello', {
+    token: socket.data.token,
+    inRoom: Boolean(existing),
+    hub: sitting ? hubView(sitting, socket.data.token) : null,
+    ...identity(socket.data.token),
+  });
   if (isAdmin(socket.data.token)) socket.emit('mod-report', modReportView());
   broadcastOnline();
   if (existing) attach(socket, existing);
+
+  socket.on('hub:create', () => {
+    const current = hubByToken(socket.data.token);
+    if (current) return socket.emit('hub', hubView(current, socket.data.token));
+    if (hubs.size > 500) return fail(socket, 'Слишком много лобби, попробуй позже');
+    const hub = {
+      code: makeHubCode(),
+      host: socket.data.token,
+      game: '',
+      slots: [socket.data.token, null, null, null, null, null],
+    };
+    hubs.set(hub.code, hub);
+    socket.emit('hub', hubView(hub, socket.data.token));
+  });
+
+  socket.on('hub:peek', ({ code } = {}) => {
+    const normalized = normalizeHubCode(code);
+    const hub = hubs.get(normalized);
+    if (!hub) return socket.emit('hub:peek', { code: normalized, missing: true, players: [] });
+    const players = hub.slots.filter(Boolean).map((slot) => ({
+      ...hubMember(slot),
+      host: slot === hub.host,
+    }));
+    socket.emit('hub:peek', { code: normalized, missing: false, players });
+  });
+
+  socket.on('hub:join', ({ code } = {}) => {
+    const hub = hubs.get(normalizeHubCode(code));
+    if (!hub) return fail(socket, 'Лобби не найдено');
+    if (hub.slots.includes(socket.data.token)) return socket.emit('hub', hubView(hub, socket.data.token));
+    if (hubByToken(socket.data.token)) return fail(socket, 'Сначала выйди из своего лобби');
+    const free = hub.slots.findIndex((slot) => !slot);
+    if (free < 0) return fail(socket, 'В лобби нет свободных слотов');
+    hub.slots[free] = socket.data.token;
+    broadcastHub(hub);
+  });
+
+  socket.on('hub:leave', () => {
+    const hub = hubByToken(socket.data.token);
+    if (hub) pullFromHub(hub, socket.data.token);
+    socket.emit('hub', null);
+  });
+
+  socket.on('hub:game', ({ game } = {}) => {
+    const hub = hubByToken(socket.data.token);
+    if (!hub || !HUB_GAMES.has(game)) return;
+    hub.game = game;
+    broadcastHub(hub);
+  });
+
+  socket.on('hub:invite', ({ id } = {}) => {
+    const hub = hubByToken(socket.data.token);
+    if (!hub) return fail(socket, 'Сначала войди в лобби');
+    if (!hub.slots.some((slot) => !slot)) return fail(socket, 'В лобби нет свободных слотов');
+    const target = tokenByPublicId(id);
+    const entry = target ? presence.get(target) : null;
+    if (!target || !entry?.sockets.size) return fail(socket, 'Этого человека сейчас нет на сайте');
+    if (hub.slots.includes(target)) return fail(socket, 'Этот игрок уже в лобби');
+    const from = presence.get(socket.data.token);
+    const saved = profiles.get(socket.data.token);
+    const note = {
+      code: hub.code,
+      from: from?.name || saved?.name || 'Игрок',
+      fromId: publicId(socket.data.token),
+      game: hub.game || '',
+    };
+    for (const sid of entry.sockets) io.sockets.sockets.get(sid)?.emit('hub:invited', note);
+  });
+
+  socket.on('hub:answer', ({ code, accept } = {}) => {
+    if (!accept) return;
+    const hub = hubs.get(normalizeHubCode(code));
+    if (!hub) return fail(socket, 'Лобби уже закрыто');
+    if (hub.slots.includes(socket.data.token)) return socket.emit('hub', hubView(hub, socket.data.token));
+    const free = hub.slots.findIndex((slot) => !slot);
+    if (free < 0) return fail(socket, 'В лобби нет свободных слотов');
+    const current = hubByToken(socket.data.token);
+    if (current && current !== hub) pullFromHub(current, socket.data.token);
+    hub.slots[free] = socket.data.token;
+    broadcastHub(hub);
+  });
 
   socket.on('create', ({ game } = {}) => {
     if (game === 'cinema') return createCinema(socket);
@@ -1633,6 +1793,8 @@ io.on('connection', (socket) => {
     }
     broadcastOnline();
     socket.emit('identity', identity(socket.data.token));
+    const sittingHub = hubByToken(socket.data.token);
+    if (sittingHub) broadcastHub(sittingHub);
     const room = findByToken(socket.data.token);
     if (!room) return;
     if (room.game === 'cinema') {

@@ -30,6 +30,17 @@
       'onboard.avatar': 'Выбрать аватар',
       'onboard.name': 'Никнейм',
       'onboard.start': 'Начать',
+      'gate.create': 'Создать лобби',
+      'gate.join': 'Присоединиться',
+      'gate.code': 'Код лобби',
+      'slot.empty': 'Слот для игрока',
+      'hub.leave': 'Выйти',
+      'hub.choose': 'Выбрать',
+      'hub.chosen': 'Выбрано',
+      'hub.nobody': 'Сейчас на сайте никого нет',
+      'hub.invite': 'Пригласить',
+      'note.accept': 'Принять',
+      'note.decline': 'Отклонить',
       'profile': 'Профиль',
       'home.lead': 'Открой Wordle, морской бой, кинотеатр или монополию и скинь ссылку другу. Он попадёт в ту же комнату.',
       'home.code': 'Код комнаты',
@@ -74,6 +85,17 @@
       'onboard.avatar': 'Choose avatar',
       'onboard.name': 'Nickname',
       'onboard.start': 'Start',
+      'gate.create': 'Create lobby',
+      'gate.join': 'Join',
+      'gate.code': 'Lobby code',
+      'slot.empty': 'Player slot',
+      'hub.leave': 'Leave',
+      'hub.choose': 'Choose',
+      'hub.chosen': 'Chosen',
+      'hub.nobody': 'Nobody else is here right now',
+      'hub.invite': 'Invite',
+      'note.accept': 'Accept',
+      'note.decline': 'Decline',
       'profile': 'Profile',
       'home.lead': 'Open Wordle, Battleship, the cinema, or Monopoly and send the link to a friend. They join the same room.',
       'home.code': 'Room code',
@@ -288,8 +310,7 @@
       event.preventDefault();
       const name = document.getElementById('onboard-name').value.replace(/\s+/g, ' ').trim().slice(0, 20);
       hooks?.saveProfile({ name, avatar: draftAvatar });
-      document.getElementById('onboard').hidden = true;
-      hooks?.rerender();
+      hooks?.createLobby?.();
     });
     const nav = performance.getEntriesByType('navigation')[0];
     if (!nav || nav.type !== 'reload') showOnboard();

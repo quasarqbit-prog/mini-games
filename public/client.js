@@ -52,11 +52,13 @@ function loadProfile() {
 }
 
 const socket = io({ auth: { token } });
+window.leisureSocket = socket;
 
 let connected = false;
 let booting = true;
 let onlineUsers = [];
 let state = null;
+let hub = null;
 let draft = '';
 let chatDraft = '';
 let setupDraft = '';
@@ -1292,7 +1294,41 @@ function paintAdminMenu() {
   document.body.insertAdjacentHTML('beforeend', adminMenuHtml());
 }
 
+function playingGame() {
+  return Boolean(state && state.phase && state.phase !== 'lobby');
+}
+
+function renderFront() {
+  if (booting && !hub) return;
+  const onboard = document.getElementById('onboard');
+  document.body.classList.remove('in-game', 'in-mono', 'in-cinema');
+  if (hub) {
+    document.body.classList.add('in-hub');
+    document.body.classList.remove('at-gate');
+    if (onboard) onboard.hidden = true;
+    renderHeader();
+    window.LobbyShell?.render(view, hub, {
+      name: profile.name,
+      avatar: profile.avatar,
+      id: shownUserId(),
+    }, onlineUsers);
+    return;
+  }
+  document.body.classList.remove('in-hub');
+  document.body.classList.add('at-gate');
+  if (onboard) onboard.hidden = false;
+  view.innerHTML = '';
+  renderHeader();
+}
+
 function render() {
+  if (!playingGame()) {
+    renderFront();
+    return;
+  }
+  document.body.classList.remove('in-hub', 'at-gate');
+  const onboard = document.getElementById('onboard');
+  if (onboard) onboard.hidden = true;
   if (state?.game === 'cinema') {
     document.body.classList.remove('in-mono');
     renderCinema();
@@ -1837,6 +1873,12 @@ socket.on('hello', (payload) => {
     localStorage.setItem(TOKEN_KEY, token);
   }
   if (payload?.userId) publicUserId = payload.userId;
+  hub = payload?.hub || null;
+  if (hub) {
+    booting = false;
+    render();
+    return;
+  }
   if (!payload?.inRoom) {
     booting = false;
     if (!state) render();
@@ -1861,7 +1903,13 @@ socket.on('mod-report', (list) => {
 
 socket.on('online', (list) => {
   onlineUsers = Array.isArray(list) ? list : [];
-  if (!state && !booting) render();
+  if (!playingGame() && !booting) render();
+});
+
+socket.on('hub', (payload) => {
+  hub = payload || null;
+  booting = false;
+  if (!playingGame()) render();
 });
 
 socket.on('mail', (list) => {
@@ -3397,6 +3445,17 @@ document.addEventListener('pointermove', (event) => {
   };
   hudIdleTimer = setTimeout(settle, 3000);
 });
+window.leisureJoin = ({ name, avatar, code }) => {
+  profile = {
+    name: String(name || '').slice(0, 20),
+    avatar: avatar == null ? profile.avatar : String(avatar),
+    userId: profile.userId || '',
+  };
+  localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+  socket.emit('profile', profile);
+  socket.emit('hub:join', { code });
+};
+
 window.Leisure?.mount({
   rerender() {
     render();
@@ -3404,6 +3463,9 @@ window.Leisure?.mount({
   },
   profile() {
     return profile;
+  },
+  createLobby() {
+    socket.emit('hub:create');
   },
   saveProfile(next) {
     profile = {
