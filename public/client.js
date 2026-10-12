@@ -141,6 +141,7 @@ function copyText(text, okMessage) {
 function copyCode(text) {
   copyText(text, 'Код скопирован');
 }
+window.leisureCopy = copyText;
 
 let audioCtx = null;
 function playChatSound() {

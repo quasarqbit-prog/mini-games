@@ -187,7 +187,7 @@
       <section class="hub">
         <header class="hub-bar">
           <button type="button" class="act" data-hub="leave">${escapeHtml(tr('hub.leave', 'Выйти'))}</button>
-          <div class="hub-brand"><b>LEISURE</b><small>${escapeHtml(hub.code)}</small></div>
+          <div class="hub-brand"><b>LEISURE</b><button type="button" class="hub-code" data-hub="copy-link">${escapeHtml(hub.code)}</button></div>
           <button type="button" class="hub-you" data-hub="profile">
             <div>
               <b>${escapeHtml(me.name || '—')}</b>
@@ -327,6 +327,11 @@
       socket.emit('hub:invite', { id: el.dataset.id });
       inviteUsed = true;
       paint();
+      return;
+    }
+    if (act === 'copy-link') {
+      const code = last?.hub?.code || '';
+      if (code) window.leisureCopy?.( `${location.origin}/?room=${encodeURIComponent(code)}`, tr('hub.link', 'Ссылка скопирована'));
       return;
     }
     if (act === 'leave') {

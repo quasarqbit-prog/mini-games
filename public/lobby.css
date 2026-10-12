@@ -133,9 +133,25 @@ body.in-hub .top {
   font-size: 22px;
 }
 
-.hub-brand small {
-  letter-spacing: 0.28em;
+.hub-brand small,
+.hub-code {
+  display: block;
+  margin: 0 auto;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
   color: var(--mark);
+  font: inherit;
+  letter-spacing: 0.28em;
+  cursor: pointer;
+}
+
+.hub-code:hover,
+.hub-code:active {
+  transform: none;
+  filter: none;
+  box-shadow: none;
 }
 
 .hub-you {

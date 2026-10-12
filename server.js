@@ -585,6 +585,15 @@ function compactHub(hub) {
   hub.slots = hub.slots.filter(Boolean);
 }
 
+function enterHub(socket, hub) {
+  compactHub(hub);
+  if (hub.slots.includes(socket.data.token)) return socket.emit('hub', hubView(hub, socket.data.token));
+  if (hubByToken(socket.data.token)) return fail(socket, 'Сначала выйди из своего лобби');
+  if (hub.slots.length >= HUB_SLOT_MAX) return fail(socket, 'В лобби нет свободных слотов');
+  hub.slots.push(socket.data.token);
+  broadcastHub(hub);
+}
+
 function makeHubCode() {
   let code = '';
   for (let i = 0; i < 5; i += 1) code += CODE_ALPHABET[crypto.randomInt(CODE_ALPHABET.length)];
@@ -1563,12 +1572,7 @@ io.on('connection', (socket) => {
   socket.on('hub:join', ({ code } = {}) => {
     const hub = hubs.get(normalizeHubCode(code));
     if (!hub) return fail(socket, 'Лобби не найдено');
-    compactHub(hub);
-    if (hub.slots.includes(socket.data.token)) return socket.emit('hub', hubView(hub, socket.data.token));
-    if (hubByToken(socket.data.token)) return fail(socket, 'Сначала выйди из своего лобби');
-    if (hub.slots.length >= HUB_SLOT_MAX) return fail(socket, 'В лобби нет свободных слотов');
-    hub.slots.push(socket.data.token);
-    broadcastHub(hub);
+    enterHub(socket, hub);
   });
 
   socket.on('hub:leave', () => {
@@ -1670,7 +1674,11 @@ io.on('connection', (socket) => {
   socket.on('join', ({ code } = {}) => {
     const normalized = String(code || '').trim().toUpperCase().replace(/\s+/g, '');
     const room = rooms.get(normalized);
-    if (!room) return fail(socket, 'Комната не найдена');
+    if (!room) {
+      const hub = hubs.get(normalizeHubCode(code));
+      if (hub) return enterHub(socket, hub);
+      return fail(socket, 'Комната не найдена');
+    }
     if (room.game === 'cinema') return joinCinema(socket, room);
     if (room.game === 'mono') return joinMono(socket, room);
 
