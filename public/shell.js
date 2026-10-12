@@ -163,7 +163,7 @@
       '--line': accent,
       '--tile-line': accent,
       '--absent': card,
-      '--shadow': '4px 4px 0 #000',
+      '--shadow': '0 9px 0 4px #000',
     };
     Object.entries(vars).forEach(([name, value]) => root.style.setProperty(name, value));
     root.style.colorScheme = text === '#1A1208' ? 'light' : 'dark';

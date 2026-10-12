@@ -1,15 +1,30 @@
 (function backdrop() {
-  const canvas = document.getElementById('bg-fx');
+  const canvas = document.getElementById('bg-net');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
-  const dots = [];
-  const count = 72;
-  const angle = Math.random() * Math.PI * 2;
-  const speed = 0.28;
-  const velocity = { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed };
+  const particles = [];
   const pointer = { x: -9999, y: -9999 };
+  const maxDistance = 120;
+  const mouseRadius = 150;
   let width = 0;
   let height = 0;
+
+  function targetCount() {
+    const area = window.innerWidth * window.innerHeight;
+    return Math.max(60, Math.min(190, Math.round(area / 12000)));
+  }
+
+  function spawn() {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 0.12 + Math.random() * 0.28;
+    return {
+      x: Math.random() * width,
+      y: Math.random() * height,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      r: 1.5 + Math.random() * 1.5,
+    };
+  }
 
   function resize() {
     const ratio = Math.min(window.devicePixelRatio || 1, 2);
@@ -20,66 +35,64 @@
     canvas.style.width = `${width}px`;
     canvas.style.height = `${height}px`;
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-    if (!dots.length) {
-      for (let i = 0; i < count; i += 1) {
-        dots.push({ x: Math.random() * width, y: Math.random() * height });
-      }
-    }
+    const count = targetCount();
+    while (particles.length < count) particles.push(spawn());
+    if (particles.length > count) particles.length = count;
   }
 
-  function silhouette(time) {
-    const x = width * 0.5 + Math.sin(time * 0.00035) * width * 0.22;
-    const y = height * 0.48 + Math.cos(time * 0.00027) * height * 0.12;
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.scale(1 + Math.sin(time * 0.0005) * 0.06, 1);
-    ctx.filter = 'blur(22px)';
-    ctx.fillStyle = 'rgba(82, 51, 68, 0.85)';
-    ctx.beginPath();
-    ctx.arc(0, -70, 46, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.moveTo(-78, 120);
-    ctx.quadraticCurveTo(-90, 10, -36, -16);
-    ctx.quadraticCurveTo(0, -36, 36, -16);
-    ctx.quadraticCurveTo(90, 10, 78, 120);
-    ctx.closePath();
-    ctx.fill();
-    ctx.restore();
+  function ink() {
+    const value = getComputedStyle(document.documentElement).getPropertyValue('--text').trim();
+    return value || '#F6EFE4';
   }
 
-  function frame(time) {
+  function frame() {
     ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = '#070408';
-    ctx.fillRect(0, 0, width, height);
-    silhouette(time);
-    for (const dot of dots) {
-      dot.x += velocity.x;
-      dot.y += velocity.y;
+    for (const dot of particles) {
+      dot.x += dot.vx;
+      dot.y += dot.vy;
       if (dot.x < 0) dot.x += width;
       if (dot.y < 0) dot.y += height;
       if (dot.x > width) dot.x -= width;
       if (dot.y > height) dot.y -= height;
     }
-    const near = dots.filter((dot) => {
-      const dx = dot.x - pointer.x;
-      const dy = dot.y - pointer.y;
-      return dx * dx + dy * dy < 150 * 150;
-    });
-    ctx.strokeStyle = 'rgba(166, 117, 66, 0.55)';
+
+    const color = ink();
     ctx.lineWidth = 1;
-    for (let i = 0; i < near.length; i += 1) {
-      for (let j = i + 1; j < near.length; j += 1) {
+    for (let i = 0; i < particles.length; i += 1) {
+      const a = particles[i];
+      for (let j = i + 1; j < particles.length; j += 1) {
+        const b = particles[j];
+        const dx = a.x - b.x;
+        const dy = a.y - b.y;
+        const distance = Math.hypot(dx, dy);
+        if (distance >= maxDistance) continue;
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = 1 - distance / maxDistance;
         ctx.beginPath();
-        ctx.moveTo(near[i].x, near[i].y);
-        ctx.lineTo(near[j].x, near[j].y);
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
         ctx.stroke();
       }
+      const mx = a.x - pointer.x;
+      const my = a.y - pointer.y;
+      const mouseDistance = Math.hypot(mx, my);
+      if (mouseDistance >= mouseRadius) continue;
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = 1 - mouseDistance / mouseRadius;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(pointer.x, pointer.y);
+      ctx.stroke();
     }
-    ctx.fillStyle = 'rgba(229, 214, 196, 0.85)';
-    for (const dot of dots) {
-      ctx.fillRect(dot.x, dot.y, 2, 2);
+
+    ctx.globalAlpha = 0.92;
+    ctx.fillStyle = color;
+    for (const dot of particles) {
+      ctx.beginPath();
+      ctx.arc(dot.x, dot.y, dot.r, 0, Math.PI * 2);
+      ctx.fill();
     }
+    ctx.globalAlpha = 1;
     requestAnimationFrame(frame);
   }
 
