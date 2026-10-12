@@ -1,12 +1,15 @@
 (function lobbyShell() {
-  const GAMES = [
-    { id: 'wordle', icon: wordleIcon },
-    { id: 'battle', icon: battleIcon },
-    { id: 'cinema', icon: cinemaIcon },
-    { id: 'mono', icon: monoIcon },
-  ];
+  const ICONS = {
+    wordle: '/assets/wordle.png',
+    battle: '/assets/sea_war.png',
+    cinema: '/assets/cinema.png',
+    mono: '/assets/monopoly.png',
+  };
+  const GAMES = ['wordle', 'battle', 'cinema', 'mono'];
   let page = 0;
-  let openSlot = null;
+  let inviteOpen = false;
+  let inviteUsed = false;
+  let motion = null;
   let last = null;
   const notes = [];
 
@@ -42,31 +45,58 @@
     const star = slot.host ? '<svg class="slot-star" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1.2 9.8 5.6 14.6 6l-3.6 3.1.9 4.7L8 11.6 4.1 13.8l.9-4.7L1.4 6l4.8-.4Z"/></svg>' : '';
     return `
       <div class="slot">
-        <span class="slot-face">${face(slot, '•')}${star}</span>
-        <span>${escapeHtml(slot.name || slot.id || '—')}</span>
+        <span class="slot-face">${face(slot, '•')}</span>
+        <span class="slot-name">${escapeHtml(slot.name || slot.id || '—')}</span>
+        ${star}
       </div>`;
   }
 
-  function inviteHtml(hub, online) {
-    if (openSlot == null || !hub.slots[openSlot]?.empty) return '';
+  function cardHtml(id, hub) {
+    const chosen = hub.game === id;
+    return `
+      <div class="pick-icon"><img src="${ICONS[id]}" alt=""></div>
+      <h2>${escapeHtml(gameTitle(id))}</h2>
+      <p>${escapeHtml(tr(`game.${id}.text`, ''))}</p>
+      <button type="button" class="act" data-hub="choose" data-game="${id}">${escapeHtml(tr(chosen ? 'hub.chosen' : 'hub.choose', chosen ? 'Выбрано' : 'Выбрать'))}</button>`;
+  }
+
+  function inviteLayer(hub, online) {
+    if (!inviteOpen) return '';
     const taken = new Set(hub.slots.filter((slot) => !slot.empty).map((slot) => slot.id));
-    const people = (online || []).filter((person) => person.id && !person.you && !taken.has(person.id));
+    const people = (online || []).filter((person) => person.id && !person.you);
     const rows = people.length
-      ? people.map((person) => `
-          <button type="button" data-hub="send" data-id="${escapeHtml(person.id)}">
-            ${face(person, person.id)}
-            <span>${escapeHtml(person.name || person.id)}</span>
-          </button>`).join('')
+      ? people.map((person) => {
+        const blocked = inviteUsed || taken.has(person.id);
+        const plus = blocked
+          ? '<span class="slot-plus off" aria-hidden="true">+</span>'
+          : `<button type="button" class="slot-plus" data-hub="send" data-id="${escapeHtml(person.id)}">+</button>`;
+        return `
+          <div class="slot">
+            <span class="slot-face">${face(person, person.id)}</span>
+            <span class="slot-name">${escapeHtml(person.name || person.id)}</span>
+            ${plus}
+          </div>`;
+      }).join('')
       : `<p>${escapeHtml(tr('hub.nobody', 'Сейчас на сайте никого нет'))}</p>`;
-    return `<div class="invite-pop"><p>${escapeHtml(tr('hub.invite', 'Пригласить'))}</p>${rows}</div>`;
+    return `
+      <div class="invite-layer" data-hub="invite-close">
+        <div class="invite-sheet" data-hub="invite-hold">
+          <div class="invite-head">
+            <b>${escapeHtml(tr('hub.invite', 'Пригласить'))}</b>
+            <button type="button" data-hub="invite-dismiss">${escapeHtml(tr('profile.close', 'Закрыть'))}</button>
+          </div>
+          ${rows}
+        </div>
+      </div>`;
   }
 
   function paint() {
     if (!last?.root) return;
     const hub = last.hub;
     const game = GAMES[page] || GAMES[0];
-    const chosen = hub.game === game.id;
     const me = last.me || {};
+    const enterClass = motion ? (motion.dir > 0 ? 'in-bottom' : 'in-top') : '';
+    const leaveClass = motion ? (motion.dir > 0 ? 'out-up' : 'out-down') : '';
     last.root.innerHTML = `
       <section class="hub">
         <header class="hub-bar">
@@ -81,27 +111,35 @@
           </div>
         </header>
         <div class="hub-main">
-          <div class="hub-slots">
+          <div class="hub-slots hub-frame">
             ${hub.slots.map(slotHtml).join('')}
-            ${inviteHtml(hub, last.online)}
           </div>
-          <div class="hub-pick">
-            <article class="pick-card">
-              <div class="pick-icon">${game.icon()}</div>
-              <h2>${escapeHtml(gameTitle(game.id))}</h2>
-              <p>${escapeHtml(tr(`game.${game.id}.text`, ''))}</p>
-              <button type="button" class="act" data-hub="choose" data-game="${game.id}">${escapeHtml(tr(chosen ? 'hub.chosen' : 'hub.choose', chosen ? 'Выбрано' : 'Выбрать'))}</button>
-            </article>
-            <div class="hub-arrows">
-              <button type="button" class="act" data-hub="page" data-dir="-1" aria-label="Previous">↑</button>
-              <button type="button" class="act" data-hub="page" data-dir="1" aria-label="Next">↓</button>
+          <div class="hub-pick hub-frame">
+            <div class="pick-col">
+              <div class="pick-stage">
+                ${motion ? `<article class="pick-card fly ${leaveClass}">${cardHtml(GAMES[motion.from], hub)}</article>` : ''}
+                <article class="pick-card ${enterClass}">${cardHtml(game, hub)}</article>
+              </div>
+              <div class="pick-nav">
+                <button type="button" class="act" data-hub="page" data-dir="-1" aria-label="Previous">↑</button>
+                <button type="button" class="act" data-hub="page" data-dir="1" aria-label="Next">↓</button>
+              </div>
             </div>
             <div class="gems">
-              ${GAMES.map((item, index) => `<i class="gem${index === page ? ' on' : ''}"></i>`).join('')}
+              ${GAMES.map((id, index) => `
+                <button type="button" class="gem-btn${index === page ? ' on' : ''}" data-hub="jump" data-index="${index}">
+                  <i class="gem${index === page ? ' on' : ''}"></i>
+                  <span>${escapeHtml(gameTitle(id))}</span>
+                </button>`).join('')}
             </div>
           </div>
         </div>
+        ${inviteLayer(hub, last.online)}
       </section>`;
+    if (motion) {
+      const node = last.root.querySelector('.pick-card.in-bottom, .pick-card.in-top');
+      node?.addEventListener('animationend', () => { motion = null; }, { once: true });
+    }
   }
 
   function paintNotes() {
@@ -141,15 +179,33 @@
     const socket = window.leisureSocket;
     if (!el || !socket) return;
     const act = el.dataset.hub;
+    if (act === 'invite-hold') return;
+    if (act === 'invite-close' || act === 'invite-dismiss') {
+      if (act === 'invite-close' && event.target !== el) return;
+      inviteOpen = false;
+      inviteUsed = false;
+      paint();
+      return;
+    }
     if (act === 'slot') {
-      const index = Number(el.dataset.index);
-      openSlot = openSlot === index ? null : index;
+      inviteOpen = true;
+      inviteUsed = false;
       paint();
       return;
     }
     if (act === 'page') {
+      if (motion) return;
       const dir = Number(el.dataset.dir) || 1;
+      motion = { dir, from: page };
       page = (page + dir + GAMES.length) % GAMES.length;
+      paint();
+      return;
+    }
+    if (act === 'jump') {
+      const index = Number(el.dataset.index);
+      if (!Number.isInteger(index) || index === page || index < 0 || index >= GAMES.length) return;
+      motion = null;
+      page = index;
       paint();
       return;
     }
@@ -158,13 +214,15 @@
       return;
     }
     if (act === 'send') {
+      if (inviteUsed) return;
       socket.emit('hub:invite', { id: el.dataset.id });
-      openSlot = null;
+      inviteUsed = true;
       paint();
       return;
     }
     if (act === 'leave') {
-      openSlot = null;
+      inviteOpen = false;
+      inviteUsed = false;
       socket.emit('hub:leave');
       return;
     }
@@ -220,23 +278,9 @@
   window.LobbyShell = {
     render(root, hub, me, online) {
       bindSocket();
-      if (openSlot != null && !hub?.slots?.[openSlot]?.empty) openSlot = null;
       last = { root, hub, me, online };
       paint();
     },
   };
   bindSocket();
-
-  function wordleIcon() {
-    return '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="6" y="14" width="10" height="10" fill="#3f8f5b"/><rect x="18" y="14" width="10" height="10" fill="#c48a2a"/><rect x="30" y="14" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2"/><rect x="42" y="14" width="10" height="10" fill="#3f8f5b"/><rect x="54" y="14" width="6" height="10" fill="none" stroke="currentColor" stroke-width="2"/></svg>';
-  }
-  function battleIcon() {
-    return '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="8" y="8" width="48" height="48" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 24h48M8 40h48M24 8v48M40 8v48" stroke="currentColor" stroke-width="2"/></svg>';
-  }
-  function cinemaIcon() {
-    return '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="6" y="14" width="52" height="36" fill="none" stroke="currentColor" stroke-width="2"/><path d="M28 24v16l14-8Z" fill="currentColor"/></svg>';
-  }
-  function monoIcon() {
-    return '<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M8 30 32 10l24 20" fill="none" stroke="currentColor" stroke-width="2"/><rect x="16" y="30" width="32" height="24" fill="none" stroke="currentColor" stroke-width="2"/></svg>';
-  }
 })();

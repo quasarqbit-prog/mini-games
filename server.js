@@ -56,8 +56,11 @@ function retargetThreads(oldId, newId) {
 }
 
 function claimPublicId(token, raw) {
-  if (isAdmin(token)) return { ok: false, error: 'ID администратора нельзя сменить' };
   const next = String(raw || '').trim().slice(0, 16);
+  if (isAdmin(token)) {
+    if (!next || /^admin$/i.test(next)) return { ok: true, id: 'ADMIN' };
+    return { ok: false, error: 'ID администратора нельзя сменить' };
+  }
   if (!/^[A-Za-zА-Яа-яЁё0-9_-]{2,16}$/.test(next)) {
     return { ok: false, error: 'ID: от 2 до 16 букв, цифр, _ или -' };
   }
@@ -87,7 +90,7 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { maxHttpBufferSize: 2e6 });
 
-app.use('/assets/font', express.static(path.join(__dirname, 'assets', 'font')));
+app.use('/assets', express.static(path.join(__dirname, 'assets')));
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, rooms: rooms.size });
