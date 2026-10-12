@@ -250,11 +250,16 @@ function shownUserId() {
   return isLocalAdmin() ? 'ADMIN' : userCode(token);
 }
 
+function tr(key, fallback) {
+  const value = window.Leisure?.t(key);
+  return value && value !== key ? value : fallback;
+}
+
 function renderHeader() {
   headerSlot.innerHTML = `
     <button type="button" class="profile-chip" data-act="profile">
       ${avatarHtml(profile, 'Я')}
-      <span>${escapeHtml(profile.name || 'Профиль')}</span>
+      <span>${escapeHtml(profile.name || tr('profile', 'Профиль'))}</span>
     </button>`;
 }
 
@@ -485,8 +490,8 @@ function menuChatHtml() {
   }).join('');
   return `
     <section class="menu-chat">
-      <h2>Чат</h2>
-      ${blocks || '<p class="note">Когда кто-то будет онлайн, здесь появится блок для переписки.</p>'}
+      <h2>${escapeHtml(tr('home.chat', 'Чат'))}</h2>
+      ${blocks || `<p class="note">${escapeHtml(tr('home.chat.empty', 'Когда кто-то будет онлайн, здесь появится блок для переписки.'))}</p>`}
     </section>`;
 }
 
@@ -534,43 +539,43 @@ function homeHtml() {
   if ((inviteCode || booting) && !state) {
     return `
       <section class="home">
-        <p class="lead">Подключаемся…</p>
+        <p class="lead">${escapeHtml(tr('home.connecting', 'Подключаемся…'))}</p>
       </section>`;
   }
   return `
     <section class="home">
       ${adminHomeHtml()}
-      <p class="lead">Открой Wordle, морской бой, кинотеатр или монополию и скинь ссылку другу. Он попадёт в ту же комнату.</p>
+      <p class="lead">${escapeHtml(tr('home.lead', 'Открой Wordle, морской бой, кинотеатр или монополию и скинь ссылку другу. Он попадёт в ту же комнату.'))}</p>
       <form class="join" data-act="join">
-        <label for="room-code">Код комнаты</label>
+        <label for="room-code">${escapeHtml(tr('home.code', 'Код комнаты'))}</label>
         <input id="room-code" maxlength="8" autocomplete="off" placeholder="ABCDE" ${connected ? '' : 'disabled'}>
-        <button class="btn wide" type="submit" ${connected ? '' : 'disabled'}>Присоединиться</button>
+        <button class="btn wide" type="submit" ${connected ? '' : 'disabled'}>${escapeHtml(tr('home.join', 'Присоединиться'))}</button>
       </form>
-      <div class="sep"><span>Игры</span></div>
+      <div class="sep"><span>${escapeHtml(tr('home.games', 'Игры'))}</span></div>
       <div class="games">
         <button class="game-card" type="button" data-act="create" data-game="wordle" ${connected ? '' : 'disabled'}>
           <div class="tiles-preview"><i class="g"></i><i class="y"></i><i class="a"></i><i class="g"></i><i class="a"></i></div>
-          <h2>Wordle</h2>
-          <p>Загадайте слово друг другу и угадывайте по очереди. Кто первый угадает — победил.</p>
-          <span class="tag">2 игрока</span>
+          <h2>${escapeHtml(tr('game.wordle', 'Wordle'))}</h2>
+          <p>${escapeHtml(tr('game.wordle.text', 'Загадайте слово друг другу и угадывайте по очереди. Кто первый угадает — победил.'))}</p>
+          <span class="tag">${escapeHtml(tr('game.wordle.tag', '2 игрока'))}</span>
         </button>
         <button class="game-card" type="button" data-act="create" data-game="battle" ${connected ? '' : 'disabled'}>
           <div class="sea-preview" aria-hidden="true"><i class="ship"></i><i></i><i class="hit"></i><i></i><i class="ship"></i><i></i><i class="miss"></i><i></i><i class="ship"></i></div>
-          <h2>Морской бой</h2>
-          <p>Расставьте флот и стреляйте по полю соперника. Попадание даёт ещё один ход.</p>
-          <span class="tag">2 игрока</span>
+          <h2>${escapeHtml(tr('game.battle', 'Морской бой'))}</h2>
+          <p>${escapeHtml(tr('game.battle.text', 'Расставьте флот и стреляйте по полю соперника. Попадание даёт ещё один ход.'))}</p>
+          <span class="tag">${escapeHtml(tr('game.battle.tag', '2 игрока'))}</span>
         </button>
         <button class="game-card" type="button" data-act="create" data-game="cinema" ${connected ? '' : 'disabled'}>
           <div class="film-preview" aria-hidden="true"><i class="seek back"></i><i class="pause"></i><i class="seek fwd"></i></div>
-          <h2>Кинотеатр</h2>
-          <p>Смотрите вместе: YouTube, Twitch, Google Drive и Dropbox.</p>
-          <span class="tag">вместе</span>
+          <h2>${escapeHtml(tr('game.cinema', 'Кинотеатр'))}</h2>
+          <p>${escapeHtml(tr('game.cinema.text', 'Смотрите вместе: YouTube, Twitch, Google Drive и Dropbox.'))}</p>
+          <span class="tag">${escapeHtml(tr('game.cinema.tag', 'вместе'))}</span>
         </button>
         <button class="game-card" type="button" data-act="create" data-game="mono" ${connected ? '' : 'disabled'}>
           <div class="mono-preview" aria-hidden="true"><i></i><i></i><i></i><i></i><b></b><i></i><i></i><i></i><i></i></div>
-          <h2>Монополия</h2>
-          <p>Покупайте улицы, стройте дома и торгуйтесь. Кто останется при деньгах — победил.</p>
-          <span class="tag">2–6 игроков</span>
+          <h2>${escapeHtml(tr('game.mono', 'Монополия'))}</h2>
+          <p>${escapeHtml(tr('game.mono.text', 'Покупайте улицы, стройте дома и торгуйтесь. Кто останется при деньгах — победил.'))}</p>
+          <span class="tag">${escapeHtml(tr('game.mono.tag', '2–6 игроков'))}</span>
         </button>
       </div>
       ${menuChatHtml()}
@@ -3312,6 +3317,28 @@ document.addEventListener('pointermove', (event) => {
   };
   hudIdleTimer = setTimeout(settle, 3000);
 });
+window.Leisure?.mount({
+  rerender() {
+    render();
+    renderModal();
+  },
+  profile() {
+    return profile;
+  },
+  saveProfile(next) {
+    profile = {
+      name: String(next?.name || '').slice(0, 20),
+      avatar: String(next?.avatar || ''),
+    };
+    localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+    socket.emit('profile', profile);
+    renderHeader();
+  },
+  pixelAvatar(file) {
+    return fitImage(file, 48, 'image/png', 1, true);
+  },
+});
+
 document.addEventListener('pointerout', (event) => {
   if (event.target?.classList?.contains('hud-scrub')) {
     const next = event.relatedTarget;
