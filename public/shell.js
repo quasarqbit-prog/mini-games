@@ -4,18 +4,16 @@
   const CUSTOM_KEY = 'leisure-custom';
 
   const THEMES = [
-    { id: 'dark', ru: 'Тёмная', en: 'Dark', colors: ['#130A0D', '#3F242A', '#523344', '#A67542'] },
-    { id: 'light', ru: 'Светлая', en: 'Light', colors: ['#E5EDFA', '#BBD0ED', '#A2B7E4', '#7087BB'] },
-    { id: 'butterfly', ru: 'Бабочка', en: 'Butterfly', colors: ['#8DA28C', '#A4530C', '#EEE9C1', '#3A230A'] },
+    { id: 'butterfly', ru: 'Бабочка', en: 'Butterfly', text: '#000000', colors: ['#8DA28C', '#A4530C', '#EEE9C1', '#3A230A'] },
     { id: 'usugaki', ru: 'Комната', en: 'Usugaki', colors: ['#FFA67A', '#817965', '#4E4C5E', '#572F48'] },
     { id: 'ebony', ru: 'Эбен', en: 'Ebony', colors: ['#130A0D', '#3F242A', '#523344', '#A67542'] },
     { id: 'frozen', ru: 'Кристаллы', en: 'Frozen Water', colors: ['#D4E8E1', '#A0B1BB', '#DA9E7D', '#74418B'] },
-    { id: 'portage', ru: 'Закат', en: 'Portage', colors: ['#9995E8', '#BF93D0', '#FDB5A5', '#FDD2A3'] },
-    { id: 'orbital', ru: 'Орбита', en: 'Orbital', colors: ['#7087BB', '#A2B7E4', '#BBD0ED', '#E5EDFA'] },
+    { id: 'portage', ru: 'Закат', en: 'Portage', text: '#000000', colors: ['#9995E8', '#BF93D0', '#FDB5A5', '#FDD2A3'] },
+    { id: 'orbital', ru: 'Орбита', en: 'Orbital', text: '#000000', colors: ['#7087BB', '#A2B7E4', '#BBD0ED', '#E5EDFA'] },
     { id: 'topaz', ru: 'Бассейн', en: 'Blue Topaz', colors: ['#1A4D94', '#357CB6', '#D5A25E', '#AB6D48'] },
     { id: 'street', ru: 'Улица', en: 'Chinese Yellow', colors: ['#FDB201', '#F09215', '#C4610B', '#853920'] },
-    { id: 'bianchi', ru: 'Море', en: 'Bianchi Green', colors: ['#34C8C5', '#DF84BD', '#FC8A8E', '#FFAE69'] },
-    { id: 'lettuce', ru: 'Торт', en: 'Lettuce Mound', colors: ['#93A674', '#CBD9B8', '#D9C9BA', '#8D6A56'] },
+    { id: 'bianchi', ru: 'Море', en: 'Bianchi Green', text: '#000000', colors: ['#34C8C5', '#DF84BD', '#FC8A8E', '#FFAE69'] },
+    { id: 'lettuce', ru: 'Торт', en: 'Lettuce Mound', text: '#000000', colors: ['#93A674', '#CBD9B8', '#D9C9BA', '#8D6A56'] },
   ];
 
   const TEXT = {
@@ -170,7 +168,7 @@
   };
 
   let lang = localStorage.getItem(LANG_KEY) === 'en' ? 'en' : 'ru';
-  let themeId = localStorage.getItem(THEME_KEY) || 'dark';
+  let themeId = localStorage.getItem(THEME_KEY) || 'ebony';
   let hooks = null;
   let draftAvatar = '';
 
@@ -198,16 +196,17 @@
         const saved = JSON.parse(localStorage.getItem(CUSTOM_KEY) || '[]');
         if (Array.isArray(saved) && saved.length === 4) return saved;
       } catch { /* keep the dark palette */ }
-      return THEMES[0].colors.slice();
+      return (THEMES.find((item) => item.id === 'ebony') || THEMES[0]).colors.slice();
     }
-    return (THEMES.find((item) => item.id === id) || THEMES[0]).colors.slice();
+    return (THEMES.find((item) => item.id === id) || THEMES.find((item) => item.id === 'ebony') || THEMES[0]).colors.slice();
   }
 
   function applyTheme(id) {
-    themeId = id === 'custom' || THEMES.some((item) => item.id === id) ? id : 'dark';
+    themeId = id === 'custom' || THEMES.some((item) => item.id === id) ? id : 'ebony';
     localStorage.setItem(THEME_KEY, themeId);
     const [bg, card, accent, mark] = colorsOf(themeId);
-    const text = ink(bg);
+    const theme = THEMES.find((item) => item.id === themeId);
+    const text = theme?.text || ink(bg);
     const root = document.documentElement;
     root.dataset.theme = themeId;
     const vars = {
@@ -226,7 +225,7 @@
       '--shadow': '0 9px 0 4px #000',
     };
     Object.entries(vars).forEach(([name, value]) => root.style.setProperty(name, value));
-    root.style.colorScheme = text === '#1A1208' ? 'light' : 'dark';
+    root.style.colorScheme = text.toLowerCase() === '#f6efe4' ? 'dark' : 'light';
   }
 
   function applyLang(next) {
@@ -276,14 +275,19 @@
     if (menu) menu.hidden = !open;
   }
 
-  function showOnboard() {
-    const modal = document.getElementById('onboard');
-    if (!modal || modal.dataset.ready === '1') return;
+  function fillOnboard() {
     const current = hooks?.profile?.() || { name: '', avatar: '' };
     draftAvatar = current.avatar || '';
     const name = document.getElementById('onboard-name');
     if (name) name.value = current.name || '';
     paintDraft();
+  }
+
+  function showOnboard() {
+    const modal = document.getElementById('onboard');
+    if (!modal || modal.dataset.ready === '1') return;
+    fillOnboard();
+    modal.dataset.ready = '1';
     modal.hidden = false;
   }
 
@@ -348,6 +352,7 @@
       hooks?.saveProfile({ name, avatar: draftAvatar });
       hooks?.createLobby?.();
     });
+    fillOnboard();
     const nav = performance.getEntriesByType('navigation')[0];
     if (!nav || nav.type !== 'reload') showOnboard();
   }

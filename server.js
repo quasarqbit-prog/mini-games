@@ -579,6 +579,11 @@ function broadcastOnline() {
 }
 
 const HUB_GAMES = new Set(['wordle', 'battle', 'cinema', 'mono']);
+const HUB_SLOT_MAX = 16;
+
+function compactHub(hub) {
+  hub.slots = hub.slots.filter(Boolean);
+}
 
 function makeHubCode() {
   let code = '';
@@ -608,6 +613,7 @@ function hubMember(token) {
 }
 
 function hubView(hub, token) {
+  compactHub(hub);
   return {
     code: hub.code,
     game: hub.game || '',
@@ -637,9 +643,9 @@ function broadcastHub(hub) {
 function pullFromHub(hub, token) {
   const index = hub.slots.indexOf(token);
   if (index < 0) return;
-  hub.slots[index] = null;
-  if (hub.host === token) hub.host = hub.slots.find(Boolean) || '';
-  if (!hub.slots.some(Boolean)) hubs.delete(hub.code);
+  hub.slots = hub.slots.filter((slot) => slot && slot !== token);
+  if (hub.host === token) hub.host = hub.slots[0] || '';
+  if (!hub.slots.length) hubs.delete(hub.code);
   else broadcastHub(hub);
 }
 
@@ -1537,7 +1543,7 @@ io.on('connection', (socket) => {
       host: socket.data.token,
       game: '',
       settings: defaultSettings(),
-      slots: [socket.data.token, null, null, null, null, null],
+      slots: [socket.data.token],
     };
     hubs.set(hub.code, hub);
     socket.emit('hub', hubView(hub, socket.data.token));
@@ -1557,11 +1563,11 @@ io.on('connection', (socket) => {
   socket.on('hub:join', ({ code } = {}) => {
     const hub = hubs.get(normalizeHubCode(code));
     if (!hub) return fail(socket, 'Лобби не найдено');
+    compactHub(hub);
     if (hub.slots.includes(socket.data.token)) return socket.emit('hub', hubView(hub, socket.data.token));
     if (hubByToken(socket.data.token)) return fail(socket, 'Сначала выйди из своего лобби');
-    const free = hub.slots.findIndex((slot) => !slot);
-    if (free < 0) return fail(socket, 'В лобби нет свободных слотов');
-    hub.slots[free] = socket.data.token;
+    if (hub.slots.length >= HUB_SLOT_MAX) return fail(socket, 'В лобби нет свободных слотов');
+    hub.slots.push(socket.data.token);
     broadcastHub(hub);
   });
 
@@ -1588,16 +1594,14 @@ io.on('connection', (socket) => {
   socket.on('hub:move', ({ from, to } = {}) => {
     const hub = hubByToken(socket.data.token);
     if (!hub || hub.host !== socket.data.token) return fail(socket, 'Перемещает только хост');
+    compactHub(hub);
     const source = Number(from);
     const target = Number(to);
     if (!Number.isInteger(source) || !Number.isInteger(target)) return;
     if (source < 0 || target < 0 || source >= hub.slots.length || target >= hub.slots.length || source === target) return;
-    if (!hub.slots[source]) return;
-    const next = hub.slots.slice();
-    const moving = next[source];
-    next[source] = next[target];
-    next[target] = moving;
-    hub.slots = next;
+    const moving = hub.slots[source];
+    hub.slots[source] = hub.slots[target];
+    hub.slots[target] = moving;
     broadcastHub(hub);
   });
 
@@ -1613,7 +1617,8 @@ io.on('connection', (socket) => {
   socket.on('hub:invite', ({ id } = {}) => {
     const hub = hubByToken(socket.data.token);
     if (!hub) return fail(socket, 'Сначала войди в лобби');
-    if (!hub.slots.some((slot) => !slot)) return fail(socket, 'В лобби нет свободных слотов');
+    compactHub(hub);
+    if (hub.slots.length >= HUB_SLOT_MAX) return fail(socket, 'В лобби нет свободных слотов');
     const target = tokenByPublicId(id);
     const entry = target ? presence.get(target) : null;
     if (!target || !entry?.sockets.size) return fail(socket, 'Этого человека сейчас нет на сайте');
@@ -1633,12 +1638,12 @@ io.on('connection', (socket) => {
     if (!accept) return;
     const hub = hubs.get(normalizeHubCode(code));
     if (!hub) return fail(socket, 'Лобби уже закрыто');
+    compactHub(hub);
     if (hub.slots.includes(socket.data.token)) return socket.emit('hub', hubView(hub, socket.data.token));
-    const free = hub.slots.findIndex((slot) => !slot);
-    if (free < 0) return fail(socket, 'В лобби нет свободных слотов');
+    if (hub.slots.length >= HUB_SLOT_MAX) return fail(socket, 'В лобби нет свободных слотов');
     const current = hubByToken(socket.data.token);
     if (current && current !== hub) pullFromHub(current, socket.data.token);
-    hub.slots[free] = socket.data.token;
+    hub.slots.push(socket.data.token);
     broadcastHub(hub);
   });
 

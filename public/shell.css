@@ -154,8 +154,10 @@ h1, h2, h3, .brand, .code-value {
 
 .account-panel {
   position: fixed;
-  top: 64px;
-  right: 16px;
+  top: 50%;
+  left: 50%;
+  right: auto;
+  transform: translate(-50%, -50%);
   width: min(360px, calc(100vw - 16px));
   max-height: min(72vh, 560px);
   overflow: auto;

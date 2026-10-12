@@ -270,8 +270,28 @@ body.in-hub .top {
   height: 36px;
   margin-left: auto;
   flex: none;
-  color: #f3d27a;
+  object-fit: contain;
+  image-rendering: pixelated;
   background: none;
+}
+
+.slot.is-dragging {
+  opacity: 0.35;
+}
+
+.slot.is-drop,
+.slot.is-drop:hover,
+.slot.is-drop:active {
+  border-color: var(--mark);
+  box-shadow: inset 0 0 0 3px var(--mark);
+}
+
+.slot-ghost {
+  position: fixed;
+  z-index: 120;
+  pointer-events: none;
+  opacity: 0.95;
+  margin: 0;
 }
 
 .slot-plus.off {
@@ -490,7 +510,7 @@ button.slot-plus:active {
   display: grid;
   place-items: center;
   border: 3px solid var(--mark);
-  background: #000;
+  background: transparent;
 }
 
 .pick-icon img {

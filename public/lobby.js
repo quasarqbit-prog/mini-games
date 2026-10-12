@@ -48,7 +48,7 @@
           <span>${escapeHtml(label)}</span>
         </button>`;
     }
-    const star = slot.host ? '<svg class="slot-star" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1.2 9.8 5.6 14.6 6l-3.6 3.1.9 4.7L8 11.6 4.1 13.8l.9-4.7L1.4 6l4.8-.4Z"/></svg>' : '';
+    const star = slot.host ? '<img class="slot-star" draggable="false" src="/assets/host.png" alt="">' : '';
     const drag = last?.hub?.youHost ? 'draggable="true"' : '';
     return `
       <div class="slot" data-slot="${index}" ${drag}>
@@ -58,14 +58,30 @@
       </div>`;
   }
 
+  function inviteSlot(watch) {
+    return slotHtml({ empty: true }, 'invite', watch);
+  }
+
   function slotsBlock(hub) {
-    if (!duoGame(hub.game)) return hub.slots.map((slot, index) => slotHtml(slot, index, false)).join('');
+    const filled = hub.slots.filter((slot) => !slot.empty);
+    if (!duoGame(hub.game)) {
+      return filled.map((slot, index) => slotHtml(slot, index, false)).join('') + inviteSlot(false);
+    }
+    const players = filled.slice(0, 2);
+    const watchers = filled.slice(2);
+    const playerRows = players.map((slot, index) => slotHtml(slot, index, false)).join('');
+    if (players.length < 2) {
+      return `
+        <p class="slot-split">${escapeHtml(tr('hub.players', 'Игроки'))}</p>
+        ${playerRows}
+        ${inviteSlot(false)}`;
+    }
     return `
       <p class="slot-split">${escapeHtml(tr('hub.players', 'Игроки'))}</p>
-      ${slotHtml(hub.slots[0], 0, false)}
-      ${slotHtml(hub.slots[1], 1, false)}
+      ${playerRows}
       <p class="slot-split">${escapeHtml(tr('hub.watchers', 'Наблюдатели'))}</p>
-      ${hub.slots.slice(2).map((slot, index) => slotHtml(slot, index + 2, true)).join('')}`;
+      ${watchers.map((slot, index) => slotHtml(slot, index + 2, true)).join('')}
+      ${inviteSlot(true)}`;
   }
 
   function opt(settings, key, value, label) {
@@ -341,28 +357,69 @@
     socket.emit('hub:config', { settings: { ...(last.hub.settings || {}), [input.dataset.hubNum]: Number(input.value) } });
   });
 
+  let dragFrom = null;
+  let dragGhost = null;
+
+  function clearDrag() {
+    dragFrom = null;
+    dragGhost?.remove();
+    dragGhost = null;
+    document.querySelectorAll('.slot.is-dragging, .slot.is-drop').forEach((node) => {
+      node.classList.remove('is-dragging', 'is-drop');
+    });
+  }
+
+  function placeGhost(event) {
+    if (!dragGhost) return;
+    dragGhost.style.left = `${event.clientX - dragGhost.offsetWidth / 2}px`;
+    dragGhost.style.top = `${event.clientY - dragGhost.offsetHeight / 2}px`;
+  }
+
   document.addEventListener('dragstart', (event) => {
     const slot = event.target.closest('[data-slot][draggable="true"]');
     if (!slot || !last?.hub?.youHost) return;
-    event.dataTransfer.setData('text/plain', slot.dataset.slot);
+    dragFrom = slot.dataset.slot;
+    event.dataTransfer.setData('text/plain', dragFrom);
     event.dataTransfer.effectAllowed = 'move';
+    const blank = document.createElement('canvas');
+    blank.width = 1;
+    blank.height = 1;
+    event.dataTransfer.setDragImage(blank, 0, 0);
+    slot.classList.add('is-dragging');
+    dragGhost = slot.cloneNode(true);
+    dragGhost.classList.remove('is-dragging');
+    dragGhost.classList.add('slot-ghost');
+    dragGhost.style.width = `${slot.getBoundingClientRect().width}px`;
+    document.body.appendChild(dragGhost);
+    placeGhost(event);
   });
 
   document.addEventListener('dragover', (event) => {
-    if (!event.target.closest('[data-slot]') || !last?.hub?.youHost) return;
+    if (dragFrom == null || !last?.hub?.youHost) return;
     event.preventDefault();
+    placeGhost(event);
+    document.querySelectorAll('.slot.is-drop').forEach((node) => node.classList.remove('is-drop'));
+    const slot = event.target.closest('[data-slot]');
+    if (!slot || slot.dataset.slot === String(dragFrom) || slot.dataset.slot === 'invite') return;
+    slot.classList.add('is-drop');
   });
 
   document.addEventListener('drop', (event) => {
     const slot = event.target.closest('[data-slot]');
     const socket = window.leisureSocket;
-    if (!slot || !socket || !last?.hub?.youHost) return;
+    const from = Number(dragFrom);
+    if (!slot || !socket || !last?.hub?.youHost) {
+      clearDrag();
+      return;
+    }
     event.preventDefault();
-    const from = Number(event.dataTransfer.getData('text/plain'));
     const to = Number(slot.dataset.slot);
-    if (!Number.isInteger(from) || from === to) return;
+    clearDrag();
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from === to) return;
     socket.emit('hub:move', { from, to });
   });
+
+  document.addEventListener('dragend', () => clearDrag());
 
   document.getElementById('gate-join')?.addEventListener('submit', (event) => {
     event.preventDefault();
