@@ -203,7 +203,6 @@
           </div>
           ${hub.setup && hub.game ? `
             <div class="setup-wrap">
-              ${hub.youHost ? '<button type="button" class="setup-x" data-hub="back" aria-label="Close">×</button>' : ''}
               <div class="hub-pick hub-frame is-setup"><div class="mode-setup">${modeHtml(hub)}</div></div>
             </div>` : `
           <div class="hub-pick hub-frame">
