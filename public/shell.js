@@ -2,7 +2,6 @@
   const THEME_KEY = 'leisure-theme';
   const LANG_KEY = 'leisure-lang';
   const CUSTOM_KEY = 'leisure-custom';
-  const SEEN_KEY = 'leisure-onboarded';
 
   const THEMES = [
     { id: 'dark', ru: 'Тёмная', en: 'Dark', colors: ['#130A0D', '#3F242A', '#523344', '#A67542'] },
@@ -55,6 +54,14 @@
       'slot.card': 'Карточки',
       'slot.accent': 'Акцент',
       'slot.mark': 'Выделение',
+      'tab.profile': 'Профиль',
+      'tab.theme': 'Темы',
+      'tab.settings': 'Настройки',
+      'profile.id': 'ID',
+      'profile.save': 'Сохранить',
+      'profile.saved': 'Профиль сохранён',
+      'profile.close': 'Закрыть',
+      'profile.clear': 'Убрать аватарку',
     },
     en: {
       'lang.label': 'Language',
@@ -91,6 +98,14 @@
       'slot.card': 'Cards',
       'slot.accent': 'Accent',
       'slot.mark': 'Highlight',
+      'tab.profile': 'Profile',
+      'tab.theme': 'Themes',
+      'tab.settings': 'Settings',
+      'profile.id': 'ID',
+      'profile.save': 'Save',
+      'profile.saved': 'Profile saved',
+      'profile.close': 'Close',
+      'profile.clear': 'Remove avatar',
     },
   };
 
@@ -165,8 +180,8 @@
     document.querySelectorAll('[data-i18n-placeholder]').forEach((node) => {
       node.placeholder = t(node.dataset.i18nPlaceholder);
     });
-    const button = document.getElementById('lang-btn');
-    if (button) button.textContent = lang.toUpperCase();
+    const code = document.getElementById('onboard-lang-code');
+    if (code) code.textContent = lang === 'en' ? 'eng' : 'ru';
     paintThemes();
     hooks?.rerender();
   }
@@ -266,18 +281,30 @@
       draftAvatar = await hooks.pixelAvatar(file);
       paintDraft();
     });
+    document.getElementById('onboard-lang')?.addEventListener('click', () => {
+      applyLang(lang === 'ru' ? 'en' : 'ru');
+    });
     document.getElementById('onboard-form')?.addEventListener('submit', (event) => {
       event.preventDefault();
       const name = document.getElementById('onboard-name').value.replace(/\s+/g, ' ').trim().slice(0, 20);
       hooks?.saveProfile({ name, avatar: draftAvatar });
-      localStorage.setItem(SEEN_KEY, '1');
       document.getElementById('onboard').hidden = true;
       hooks?.rerender();
     });
-    if (!localStorage.getItem(SEEN_KEY)) showOnboard();
+    const nav = performance.getEntriesByType('navigation')[0];
+    if (!nav || nav.type !== 'reload') showOnboard();
   }
 
-  window.Leisure = { t, mount, applyLang, applyTheme };
+  window.Leisure = {
+    t,
+    mount,
+    applyLang,
+    applyTheme,
+    themes: THEMES,
+    themeName,
+    currentTheme() { return themeId; },
+    colorsOf,
+  };
   applyTheme(themeId);
   document.documentElement.lang = lang;
 })();

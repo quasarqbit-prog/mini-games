@@ -5,59 +5,40 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>leisure</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect rx='14' width='64' height='64' fill='%2314110e'/%3E%3Crect x='8' y='8' width='22' height='22' rx='4' fill='%233f8f5b'/%3E%3Crect x='34' y='8' width='22' height='22' rx='4' fill='%23c48a2a'/%3E%3Crect x='8' y='34' width='22' height='22' rx='4' fill='%233a332c'/%3E%3Crect x='34' y='34' width='22' height='22' rx='4' fill='%23ff6b4a'/%3E%3C/svg%3E">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400;500;600;700&family=Press+Start+2P&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/shell.css">
 </head>
 <body>
+  <canvas id="bg-fx" aria-hidden="true"></canvas>
   <div id="toasts"></div>
   <header class="top">
-    <a class="brand" href="/" data-act="home">leisure</a>
-    <div class="shell-controls">
-      <div class="drop" id="lang-pop">
-        <button type="button" class="pixel-btn" id="lang-btn" data-i18n="lang.label">Язык</button>
-        <ul class="lang-menu" id="lang-menu" hidden>
-          <li><button type="button" data-lang="ru">Русский</button></li>
-          <li><button type="button" data-lang="en">English</button></li>
-        </ul>
-      </div>
-      <button type="button" class="pixel-btn" id="theme-btn" data-i18n="theme.label">Тема</button>
-      <div id="header-slot"></div>
-    </div>
+    <div id="header-slot"></div>
+    <div id="account-panel" hidden></div>
   </header>
   <main id="view"></main>
   <div id="modal" hidden></div>
-  <div class="pixel-modal" id="theme-modal" hidden>
-    <div class="pixel-card">
-      <div class="pixel-card-head">
-        <h2 data-i18n="theme.title">Темы</h2>
-        <button type="button" class="pixel-btn" id="theme-close" data-i18n="theme.close">Закрыть</button>
-      </div>
-      <ul class="theme-list" id="theme-list"></ul>
-      <div class="custom-palette">
-        <label><span data-i18n="slot.bg">Фон</span><input type="color" data-slot="0" value="#130A0D"></label>
-        <label><span data-i18n="slot.card">Карточки</span><input type="color" data-slot="1" value="#3F242A"></label>
-        <label><span data-i18n="slot.accent">Акцент</span><input type="color" data-slot="2" value="#523344"></label>
-        <label><span data-i18n="slot.mark">Выделение</span><input type="color" data-slot="3" value="#A67542"></label>
-      </div>
-      <button type="button" class="pixel-btn" id="theme-custom" data-i18n="theme.apply">Применить</button>
-    </div>
-  </div>
   <div class="pixel-modal" id="onboard" hidden>
     <form class="pixel-card onboard-form" id="onboard-form">
-      <h2 data-i18n="onboard.title">Профиль</h2>
-      <label class="avatar-frame">
-        <img id="onboard-avatar" alt="" hidden>
-        <span id="onboard-letter">?</span>
-        <input id="onboard-file" type="file" accept="image/png,image/jpeg,image/webp" hidden>
-      </label>
-      <span data-i18n="onboard.avatar">Выбрать аватар</span>
-      <input id="onboard-name" maxlength="20" data-i18n-placeholder="onboard.name" placeholder="Никнейм">
+      <button type="button" class="planet-lang" id="onboard-lang">
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+          <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.5"></circle>
+          <ellipse cx="8" cy="8" rx="3" ry="6" fill="none" stroke="currentColor" stroke-width="1.5"></ellipse>
+          <path d="M2 8h12M3.2 5.2h9.6M3.2 10.8h9.6" fill="none" stroke="currentColor" stroke-width="1.5"></path>
+        </svg>
+        <span id="onboard-lang-code">ru</span>
+      </button>
+      <div class="onboard-row">
+        <label class="avatar-frame">
+          <img id="onboard-avatar" alt="" hidden>
+          <span id="onboard-letter">?</span>
+          <input id="onboard-file" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+        </label>
+        <input id="onboard-name" maxlength="20" data-i18n-placeholder="onboard.name" placeholder="Никнейм">
+      </div>
       <button class="pixel-btn" type="submit" data-i18n="onboard.start">Начать</button>
     </form>
   </div>
+  <script src="/backdrop.js"></script>
   <script src="/socket.io/socket.io.js"></script>
   <script src="/shell.js"></script>
   <script src="/monopoly.js"></script>

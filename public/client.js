@@ -44,6 +44,7 @@ function loadProfile() {
     return {
       name: String(data.name || '').slice(0, 20),
       avatar: String(data.avatar || ''),
+      userId: String(data.userId || '').slice(0, 16),
     };
   } catch {
     return { name: '', avatar: '' };
@@ -75,7 +76,9 @@ let chatUnread = 0;
 let chatNotice = '';
 let profile = loadProfile();
 let profileOpen = false;
+let profileTab = 'profile';
 let profileDraft = null;
+let publicUserId = '';
 let stickers = loadStickers();
 let replyDraft = null;
 let emojiOpen = false;
@@ -247,7 +250,8 @@ function isLocalAdmin() {
 }
 
 function shownUserId() {
-  return isLocalAdmin() ? 'ADMIN' : userCode(token);
+  if (isLocalAdmin()) return 'ADMIN';
+  return publicUserId || profile.userId || userCode(token);
 }
 
 function tr(key, fallback) {
@@ -263,38 +267,70 @@ function renderHeader() {
     </button>`;
 }
 
+function accountTab(id, label) {
+  return `<button type="button" class="pixel-btn${profileTab === id ? ' on' : ''}" data-act="profile-tab" data-tab="${id}">${escapeHtml(label)}</button>`;
+}
+
+function themeTabHtml() {
+  const themes = window.Leisure?.themes || [];
+  const current = window.Leisure?.currentTheme?.() || '';
+  const colors = window.Leisure?.colorsOf?.(current) || ['#130A0D', '#3F242A', '#523344', '#A67542'];
+  const items = themes.map((theme) => `
+    <li>
+      <button type="button" class="theme-swatch${theme.id === current ? ' on' : ''}" data-act="shell-theme" data-theme="${theme.id}">
+        <span class="swatches">${theme.colors.map((color) => `<i style="background:${color}"></i>`).join('')}</span>
+        <b>${escapeHtml(window.Leisure.themeName(theme))}</b>
+      </button>
+    </li>`).join('');
+  return `
+    <ul class="theme-list">${items}</ul>
+    <div class="custom-palette">
+      ${['slot.bg', 'slot.card', 'slot.accent', 'slot.mark'].map((key, index) => `
+        <label><span>${escapeHtml(tr(key, key))}</span><input type="color" data-slot="${index}" value="${colors[index] || '#000000'}"></label>`).join('')}
+    </div>
+    <button type="button" class="pixel-btn" data-act="shell-theme-custom">${escapeHtml(tr('theme.apply', 'Применить'))}</button>`;
+}
+
 function renderModal() {
-  const modal = document.getElementById('modal');
+  const panel = document.getElementById('account-panel');
+  if (!panel) return;
   if (!profileOpen || !profileDraft) {
-    modal.hidden = true;
-    modal.innerHTML = '';
+    panel.hidden = true;
+    panel.innerHTML = '';
     return;
   }
   const preview = profileDraft.avatar
     ? `<img class="avatar-preview" src="${escapeHtml(profileDraft.avatar)}" alt="">`
-    : `<span class="avatar-preview letter">${escapeHtml((profileDraft.name || 'Я').trim().slice(0, 1).toUpperCase() || 'Я')}</span>`;
-  modal.hidden = false;
-  modal.innerHTML = `
-    <div class="modal-card">
-      <h2>Профиль</h2>
-      <p class="profile-id"><span>ID</span> <strong>${shownUserId()}</strong></p>
-      <p class="note">Это имя и аватарка видны другу в комнате. ID остаётся за тобой в этом браузере.</p>
+    : `<span class="avatar-preview letter">${escapeHtml((profileDraft.name || '?').trim().slice(0, 1).toUpperCase() || '?')}</span>`;
+  const idValue = profileDraft.userId || shownUserId();
+  let body = '';
+  if (profileTab === 'theme') body = themeTabHtml();
+  else if (profileTab === 'settings') {
+    body = `
+      <div class="lobby-actions">
+        <button type="button" class="pixel-btn" data-act="shell-lang" data-lang="ru">ru</button>
+        <button type="button" class="pixel-btn" data-act="shell-lang" data-lang="en">eng</button>
+      </div>`;
+  } else {
+    body = `
       <label class="avatar-pick">
         ${preview}
-        <span>Выбрать аватарку</span>
+        <span>${escapeHtml(tr('onboard.avatar', 'Выбрать аватар'))}</span>
         <input class="avatar-file" type="file" accept="image/png,image/jpeg,image/webp">
       </label>
       <form data-act="save-profile">
-        <input class="profile-name" maxlength="20" placeholder="Имя" value="${escapeHtml(profileDraft.name)}">
+        <input class="profile-name" maxlength="20" placeholder="${escapeHtml(tr('onboard.name', 'Никнейм'))}" value="${escapeHtml(profileDraft.name)}">
+        <label class="profile-id">${escapeHtml(tr('profile.id', 'ID'))}
+          <input class="profile-public-id" maxlength="16" value="${escapeHtml(idValue)}" ${isLocalAdmin() ? 'readonly' : ''}>
+        </label>
         <div class="lobby-actions">
-          <button class="btn" type="submit">Сохранить</button>
-          <button class="btn ghost" type="button" data-act="close-profile">Закрыть</button>
+          <button class="btn" type="submit">${escapeHtml(tr('profile.save', 'Сохранить'))}</button>
+          <button class="btn ghost" type="button" data-act="close-profile">${escapeHtml(tr('profile.close', 'Закрыть'))}</button>
         </div>
       </form>
-      ${profileDraft.avatar ? '<button class="btn ghost wide" type="button" data-act="clear-avatar">Убрать аватарку</button>' : ''}
+      ${profileDraft.avatar ? `<button class="btn ghost wide" type="button" data-act="clear-avatar">${escapeHtml(tr('profile.clear', 'Убрать аватарку'))}</button>` : ''}
       <div class="sticker-box">
         <h3>Стикеры</h3>
-        <p class="note">Они появляются в кнопке эмодзи и отправляются в чат.</p>
         <div class="sticker-grid">
           ${stickers.map((src, index) => `
             <span>
@@ -305,8 +341,17 @@ function renderModal() {
         <label class="btn ghost wide">Добавить стикер
           <input class="sticker-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
         </label>
-      </div>
-    </div>`;
+      </div>`;
+  }
+  panel.hidden = false;
+  panel.className = 'account-panel';
+  panel.innerHTML = `
+    <div class="account-tabs">
+      ${accountTab('profile', tr('tab.profile', 'Профиль'))}
+      ${accountTab('theme', tr('tab.theme', 'Темы'))}
+      ${accountTab('settings', tr('tab.settings', 'Настройки'))}
+    </div>
+    ${body}`;
 }
 
 function readFile(file) {
@@ -1475,8 +1520,28 @@ document.addEventListener('click', (event) => {
     socket.emit('settings', { ...state.settings, [key]: value });
   }
   if (act === 'profile') {
-    profileDraft = { name: profile.name, avatar: profile.avatar };
-    profileOpen = true;
+    profileOpen = !profileOpen;
+    profileDraft = profileOpen ? { name: profile.name, avatar: profile.avatar, userId: shownUserId() } : null;
+    profileTab = 'profile';
+    renderModal();
+  }
+  if (act === 'profile-tab' && profileDraft) {
+    const typed = document.querySelector('.profile-name');
+    const id = document.querySelector('.profile-public-id');
+    if (typed) profileDraft.name = typed.value;
+    if (id) profileDraft.userId = id.value;
+    profileTab = el.dataset.tab || 'profile';
+    renderModal();
+  }
+  if (act === 'shell-lang') window.Leisure?.applyLang(el.dataset.lang);
+  if (act === 'shell-theme') {
+    window.Leisure?.applyTheme(el.dataset.theme);
+    renderModal();
+  }
+  if (act === 'shell-theme-custom') {
+    const colors = [...document.querySelectorAll('#account-panel [data-slot]')].map((input) => input.value);
+    localStorage.setItem('leisure-custom', JSON.stringify(colors));
+    window.Leisure?.applyTheme('custom');
     renderModal();
   }
   if (act === 'close-profile') {
@@ -1486,7 +1551,9 @@ document.addEventListener('click', (event) => {
   }
   if (act === 'clear-avatar' && profileDraft) {
     const typed = document.querySelector('.profile-name');
+    const id = document.querySelector('.profile-public-id');
     if (typed) profileDraft.name = typed.value;
+    if (id) profileDraft.userId = id.value;
     profileDraft.avatar = '';
     renderModal();
   }
@@ -1607,14 +1674,14 @@ document.addEventListener('submit', (event) => {
   }
   if (act === 'save-profile') {
     const name = form.querySelector('.profile-name').value.replace(/\s+/g, ' ').trim().slice(0, 20);
-    profile = { name, avatar: profileDraft?.avatar || '' };
+    const userId = form.querySelector('.profile-public-id')?.value.replace(/\s+/g, '').trim().slice(0, 16) || '';
+    profile = { name, avatar: profileDraft?.avatar || '', userId };
     localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
     socket.emit('profile', profile);
-    profileOpen = false;
-    profileDraft = null;
+    profileDraft = { name, avatar: profile.avatar, userId: userId || shownUserId() };
     renderModal();
     render();
-    toast('Профиль сохранён');
+    toast(tr('profile.saved', 'Профиль сохранён'));
   }
 });
 
@@ -1668,6 +1735,8 @@ document.addEventListener('change', async (event) => {
       profileDraft.avatar = await resizeAvatar(input.files[0]);
       const typed = document.querySelector('.profile-name');
       if (typed) profileDraft.name = typed.value;
+      const id = document.querySelector('.profile-public-id');
+      if (id) profileDraft.userId = id.value;
       renderModal();
     } catch {
       toast('Не удалось прочитать картинку');
@@ -1767,10 +1836,21 @@ socket.on('hello', (payload) => {
     token = payload.token;
     localStorage.setItem(TOKEN_KEY, token);
   }
+  if (payload?.userId) publicUserId = payload.userId;
   if (!payload?.inRoom) {
     booting = false;
     if (!state) render();
   }
+});
+
+socket.on('identity', (payload) => {
+  if (!payload?.userId) return;
+  publicUserId = payload.userId;
+  profile.userId = payload.userId;
+  localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+  if (profileDraft) profileDraft.userId = payload.userId;
+  renderHeader();
+  if (profileOpen) renderModal();
 });
 
 socket.on('mod-report', (list) => {
@@ -3329,6 +3409,7 @@ window.Leisure?.mount({
     profile = {
       name: String(next?.name || '').slice(0, 20),
       avatar: String(next?.avatar || ''),
+      userId: next?.userId != null ? String(next.userId).slice(0, 16) : (profile.userId || ''),
     };
     localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
     socket.emit('profile', profile);

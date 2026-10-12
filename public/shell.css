@@ -1,3 +1,15 @@
+@font-face {
+  font-family: "Leisure Cyrillic";
+  src: url("/assets/font/font_cyrillic.ttf") format("truetype");
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Leisure Dedicated";
+  src: url("/assets/font/font_dedicated.ttf") format("truetype");
+  font-display: swap;
+}
+
 *,
 *::before,
 *::after {
@@ -10,10 +22,28 @@ body {
 }
 
 body {
-  font-family: "Pixelify Sans", "Press Start 2P", monospace;
-  background: var(--bg);
+  font-family: "Leisure Dedicated", "Leisure Cyrillic", monospace;
+  background: #070408;
   background-image: none;
   image-rendering: pixelated;
+}
+
+#bg-fx {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  display: block;
+}
+
+.top,
+#view,
+#toasts,
+#modal,
+.admin-menu,
+.invite-box {
+  position: relative;
+  z-index: 1;
 }
 
 button,
@@ -25,26 +55,83 @@ select {
 }
 
 h1, h2, h3, .brand, .code-value {
-  font-family: "Pixelify Sans", monospace;
-  font-weight: 600;
+  font-family: "Leisure Dedicated", "Leisure Cyrillic", monospace;
+  font-weight: 400;
   letter-spacing: 0.04em;
-}
-
-.brand {
-  font-family: "Press Start 2P", "Pixelify Sans", monospace;
-  font-size: 14px;
-  color: var(--mark);
-  text-shadow: 2px 2px 0 #000;
 }
 
 .top {
   position: sticky;
   top: 0;
   z-index: 20;
-  padding: 12px 16px;
+  justify-content: flex-end;
+  padding: 10px 14px;
+  background: transparent;
+  border-bottom: 0;
+  box-shadow: none;
+}
+
+.profile-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  color: var(--text);
+}
+
+.profile-chip .avatar,
+.profile-chip .avatar.letter {
+  width: 28px;
+  height: 28px;
+  border: 2px solid var(--mark);
+  box-shadow: none;
   background: var(--card);
-  border-bottom: 4px solid var(--mark);
-  box-shadow: 0 4px 0 #000;
+}
+
+.account-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 12px;
+  width: min(440px, calc(100vw - 24px));
+  z-index: 30;
+  padding: 12px;
+  background: var(--card);
+  border: 3px solid var(--mark);
+  box-shadow: 4px 4px 0 #000;
+}
+
+.account-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.account-tabs button.on {
+  background: var(--mark);
+  color: var(--bg);
+}
+
+.onboard-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.onboard-row input { flex: 1; }
+
+.planet-lang {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  border: 3px solid var(--mark);
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: 4px 4px 0 #000;
+  padding: 6px 8px;
 }
 
 .shell-controls {

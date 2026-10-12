@@ -34,8 +34,49 @@ function isAdmin(token) {
   return rawPublicId(token) === ADMIN_ID;
 }
 
+const aliases = new Map();
+
 function publicId(token) {
-  return isAdmin(token) ? 'ADMIN' : rawPublicId(token);
+  if (isAdmin(token)) return 'ADMIN';
+  return aliases.get(token) || rawPublicId(token);
+}
+
+function retargetThreads(oldId, newId) {
+  if (!oldId || !newId || oldId === newId) return;
+  for (const [key, thread] of [...directThreads.entries()]) {
+    const parts = key.split('|');
+    if (!parts.includes(oldId)) continue;
+    directThreads.delete(key);
+    const nextKey = parts.map((part) => (part === oldId ? newId : part)).sort().join('|');
+    thread.key = nextKey;
+    const existing = directThreads.get(nextKey);
+    if (existing && existing !== thread) existing.messages.push(...thread.messages);
+    else directThreads.set(nextKey, thread);
+  }
+}
+
+function claimPublicId(token, raw) {
+  if (isAdmin(token)) return { ok: false, error: 'ID администратора нельзя сменить' };
+  const next = String(raw || '').trim().slice(0, 16);
+  if (!/^[A-Za-zА-Яа-яЁё0-9_-]{2,16}$/.test(next)) {
+    return { ok: false, error: 'ID: от 2 до 16 букв, цифр, _ или -' };
+  }
+  if (/^admin$/i.test(next)) return { ok: false, error: 'Этот ID занят' };
+  const current = publicId(token);
+  if (next.toLowerCase() === current.toLowerCase()) {
+    if (next === rawPublicId(token)) aliases.delete(token);
+    else aliases.set(token, next);
+    return { ok: true, id: publicId(token) };
+  }
+  for (const other of new Set([...presence.keys(), ...profiles.keys(), ...aliases.keys()])) {
+    if (other === token) continue;
+    if (publicId(other).toLowerCase() === next.toLowerCase()) return { ok: false, error: 'Этот ID занят' };
+  }
+  const prev = publicId(token);
+  if (next === rawPublicId(token)) aliases.delete(token);
+  else aliases.set(token, next);
+  retargetThreads(prev, publicId(token));
+  return { ok: true, id: publicId(token) };
 }
 
 function identity(token) {
@@ -46,6 +87,7 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { maxHttpBufferSize: 2e6 });
 
+app.use('/assets/font', express.static(path.join(__dirname, 'assets', 'font')));
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, rooms: rooms.size });
@@ -567,7 +609,7 @@ function personByPublicId(id) {
 
 function knownPublicId(id) {
   const clean = String(id || '');
-  if (!/^(?:[A-Z0-9]{4}-[A-Z0-9]{4}|ADMIN)$/.test(clean)) return false;
+  if (!/^(?:[A-Za-zА-Яа-яЁё0-9_-]{2,16}|ADMIN)$/.test(clean)) return false;
   for (const token of presence.keys()) if (publicId(token) === clean) return true;
   for (const token of profiles.keys()) if (publicId(token) === clean) return true;
   for (const thread of directThreads.values()) {
@@ -1573,11 +1615,15 @@ io.on('connection', (socket) => {
     broadcast(room);
   });
 
-  socket.on('profile', ({ name, avatar } = {}) => {
+  socket.on('profile', ({ name, avatar, userId } = {}) => {
     const clean = cleanName(name);
     let picture = cleanAvatar(avatar);
     if (avatar && !picture) {
       fail(socket, 'Аватарка слишком большая или неподходящего формата');
+    }
+    if (typeof userId === 'string' && userId.trim()) {
+      const claim = claimPublicId(socket.data.token, userId);
+      if (!claim.ok) fail(socket, claim.error);
     }
     profiles.set(socket.data.token, { name: clean, avatar: picture });
     const entry = presence.get(socket.data.token);
@@ -1586,6 +1632,7 @@ io.on('connection', (socket) => {
       entry.avatar = picture;
     }
     broadcastOnline();
+    socket.emit('identity', identity(socket.data.token));
     const room = findByToken(socket.data.token);
     if (!room) return;
     if (room.game === 'cinema') {
