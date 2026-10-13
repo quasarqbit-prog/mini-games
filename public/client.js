@@ -187,6 +187,33 @@ function formatLeft(deadline) {
   return `${pad2(Math.floor(total / 60))}:${pad2(total % 60)}`;
 }
 
+const CHAT_EMOJIS = [
+  { char: '🙂', index: 0 },
+  { char: '😄', index: 1 },
+  { char: '😝', index: 2 },
+  { char: '😳', index: 3 },
+  { char: '😘', index: 4 },
+  { char: '😏', index: 5 },
+  { char: '😂', index: 6 },
+  { char: '😭', index: 7 },
+  { char: '🤨', index: 8 },
+  { char: '😐', index: 9 },
+  { char: '😦', index: 10 },
+  { char: '🥺', index: 11 },
+  { char: '😒', index: 12 },
+];
+
+function emojiSpan(index, char) {
+  return `<span class="chat-emoji" style="--emoji-i:${index}" role="img" aria-label="${escapeHtml(char || '')}"></span>`;
+}
+
+function emojiText(value) {
+  return CHAT_EMOJIS.reduce(
+    (html, item) => html.split(item.char).join(emojiSpan(item.index, item.char)),
+    escapeHtml(value),
+  );
+}
+
 function escapeHtml(value) {
   return String(value)
     .replace(/&/g, '&amp;')
@@ -194,6 +221,9 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
+
+window.leisureEmojis = CHAT_EMOJIS;
+window.leisureEmojiText = emojiText;
 
 function captureForm() {
   const chat = document.querySelector('.chat-input');
@@ -354,7 +384,7 @@ function renderModal() {
           <button class="btn" type="submit">${escapeHtml(tr('profile.save', 'Сохранить'))}</button>
         </div>
       </form>
-      ${profileDraft.avatar ? `<button class="btn ghost wide" type="button" data-act="clear-avatar">${escapeHtml(tr('profile.clear', 'Убрать аватарку'))}</button>` : ''}`;
+      ${profileDraft.avatar ? `<button class="btn wide" type="button" data-act="clear-avatar">${escapeHtml(tr('profile.clear', 'Убрать аватарку'))}</button>` : ''}`;
   }
   if (pop) pop.hidden = false;
   panel.className = 'account-panel';
@@ -432,28 +462,6 @@ async function resizeSticker(file) {
   return data;
 }
 
-function knockWhite(src) {
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = image.naturalWidth || image.width || 1;
-      canvas.height = image.naturalHeight || image.height || 1;
-      const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      ctx.drawImage(image, 0, 0);
-      const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const px = frame.data;
-      for (let i = 0; i < px.length; i += 4) {
-        if (px[i] > 245 && px[i + 1] > 245 && px[i + 2] > 245) px[i + 3] = 0;
-      }
-      ctx.putImageData(frame, 0, 0);
-      resolve(canvas.toDataURL('image/png'));
-    };
-    image.onerror = () => reject(new Error('sticker'));
-    image.src = src;
-  });
-}
-
 function isSystemMessage(msg) {
   return Boolean(msg.system || msg.from === 'system');
 }
@@ -474,7 +482,7 @@ function messageBody(msg) {
   if (msg.reply?.text) {
     parts.push(`<span class="reply-quote"><span>${escapeHtml(msg.reply.name || '')}</span>${escapeHtml(msg.reply.text)}</span>`);
   }
-  if (msg.text) parts.push(`<span class="msg-text">${escapeHtml(msg.text)}</span>`);
+  if (msg.text) parts.push(`<span class="msg-text">${emojiText(msg.text)}</span>`);
   if (msg.image) parts.push(`<img class="chat-photo" alt="Фото" src="${escapeHtml(msg.image)}">`);
   if (msg.sticker) {
     const open = stickerMenuId === String(msg.id);
@@ -484,7 +492,7 @@ function messageBody(msg) {
       <button type="button" class="chat-sticker" data-act="sticker-menu" data-id="${escapeHtml(String(msg.id))}"><img class="${plate}" alt="Стикер" src="${escapeHtml(msg.sticker)}"></button>
       ${open ? (owned
         ? '<span class="sticker-owned">Уже в стикерах</span>'
-        : `<button type="button" class="btn ghost" data-act="sticker-save" data-id="${escapeHtml(String(msg.id))}">В стикеры</button>`) : ''}
+        : `<button type="button" class="btn" data-act="sticker-save" data-id="${escapeHtml(String(msg.id))}">В стикеры</button>`) : ''}
     </span>`);
   }
   return parts.join('');
@@ -511,10 +519,10 @@ function stickerTabHtml() {
         <button type="button" class="mode-opt${sticker.type === 'plain' ? ' on' : ''}" data-act="sticker-kind" data-kind="plain" data-i="${index}">${escapeHtml(tr('sticker.plain', 'Простой'))}</button>
       </div>
       <div class="lobby-actions">
-        <label class="btn ghost">${escapeHtml(tr('sticker.image', 'Сменить картинку'))}
+        <label class="btn">${escapeHtml(tr('sticker.image', 'Сменить картинку'))}
           <input class="sticker-replace" data-i="${index}" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
         </label>
-        <button type="button" class="btn ghost" data-act="sticker-delete" data-i="${index}">${escapeHtml(tr('sticker.delete', 'Удалить'))}</button>
+        <button type="button" class="btn" data-act="sticker-delete" data-i="${index}">${escapeHtml(tr('sticker.delete', 'Удалить'))}</button>
       </div>
     </article>`).join('');
   return `
@@ -542,7 +550,7 @@ function chatComposer() {
       <div class="emoji-body"></div>
     </div>
     <form class="chat-form" data-act="send-chat">
-      <button class="icon-btn" type="button" data-act="emoji-open" aria-label="Эмодзи">☺</button>
+      <button class="icon-btn" type="button" data-act="emoji-open" aria-label="Стикеры"><span class="chat-emoji" style="--emoji-i:0"></span></button>
       <button class="icon-btn" type="button" data-act="photo-open" aria-label="Прикрепить фото" title="Прикрепить фото">
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M21 6h-3.2l-1.2-2H7.4L6.2 6H3a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h18a1 1 0 0 0 1-1V7a1 1 0 0 0-1-1zm-9 11a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z"/></svg>
       </button>
@@ -1752,17 +1760,10 @@ document.addEventListener('click', (event) => {
   if (act === 'sticker-kind') {
     const item = stickers[Number(el.dataset.i)];
     if (!item) return;
-    const kind = el.dataset.kind === 'plain' ? 'plain' : 'clear';
-    const applyKind = async () => {
-      if (kind === 'clear') {
-        try { item.src = await knockWhite(item.src); } catch { /* keep the picture */ }
-      }
-      item.type = kind;
-      saveStickers();
-      renderModal();
-      paintPicker();
-    };
-    applyKind();
+    item.type = el.dataset.kind === 'plain' ? 'plain' : 'clear';
+    saveStickers();
+    renderModal();
+    paintPicker();
   }
 });
 
@@ -1890,7 +1891,7 @@ document.addEventListener('change', async (event) => {
       if (!item || !/^data:image\/(png|jpeg|webp|gif);base64,/i.test(data) || data.length > 100000) {
         toast('Стикер слишком большой');
       } else {
-        item.src = item.type === 'clear' ? await knockWhite(data) : data;
+        item.src = data;
         saveStickers();
         renderModal();
         paintPicker();
@@ -1908,7 +1909,7 @@ document.addEventListener('change', async (event) => {
       if (!/^data:image\/(png|jpeg|webp|gif);base64,/i.test(data) || data.length > 100000) {
         toast('Стикер слишком большой');
       } else {
-        stickers.push({ src: await knockWhite(data), name: '', type: 'clear' });
+        stickers.push({ src: data, name: '', type: 'clear' });
         saveStickers();
         renderModal();
         paintPicker();
@@ -2449,7 +2450,6 @@ function refreshChatLog() {
   if (stick) log.scrollTop = log.scrollHeight;
 }
 
-const QUICK_EMOJI = ["😀","😃","😄","😁","😆","😅","😂","🤣","😊","😇","🙂","🙃","😉","😌","😍","🥰","😘","😗","😙","😚","😋","😛","😜","🤪","😝","🤑","🤗","🤭","🤫","🤔","🤐","🤨","😐","😑","😶","😏","😒","🙄","😬","😮‍💨","🤥","😔","😪","🤤","😴","😷","🤒","🤕","🤢","🤮","🤧","🥵","🥶","🥴","😵","🤯","🤠","🥳","😎","🤓","🧐","😕","😟","🙁","☹️","😮","😯","😲","😳","🥺","😦","😧","😨","😰","😥","😢","😭","😱","😖","😣","😞","😓","😩","😫","🥱","😤","😡","😠","🤬","😈","👿","💀","☠️","💩","🤡","👻","👽","🤖","❤️","🧡","💛","💚","💙","💜","🖤","🤍","🤎","💔","❤️‍🔥","💕","💞","💓","💗","💖","💘","💝","💯","💢","💥","💫","💦","💨","🕳️","💬","👍","👎","👌","✌️","🤞","🫰","🤟","🤘","🤙","👈","👉","👆","👇","☝️","✋","🤚","🖐️","🖖","👋","🤝","🙏","✍️","💪","🫶","👏","🙌","👐","🤲","🔥","✨","⭐","🌟","🎉","🎊","🎁","🏆","🥇","🎈","☀️","🌙","⚡","❄️","🌈","☁️","🌸","🌹","🍀","🐶","🐱","🐭","🐹","🐰","🦊","🐻","🐼","🐨","🐯","🦁","🐸","🐵","🍎","🍕","🍔","🍟","🍺","☕","🎂","⚽","🏀","🎵","🎶","📱","💻","📷","💡","💰","✅","❌","❗","❓","⚠️","🚀"];
 
 function paintPicker() {
   const pop = document.querySelector('.emoji-pop');
@@ -2479,7 +2479,7 @@ function paintPicker() {
     }
     return;
   }
-  body.innerHTML = `<div class="emoji-grid">${QUICK_EMOJI.map((char) => `<button type="button" data-act="emoji-insert">${char}</button>`).join('')}</div>`;
+  body.innerHTML = `<div class="emoji-grid">${CHAT_EMOJIS.map((item) => `<button type="button" data-act="emoji-insert" data-char="${item.char}">${emojiSpan(item.index, item.char)}</button>`).join('')}</div>`;
 }
 
 const CINEMA_VOL_KEY = 'leisure-cinema-volume';

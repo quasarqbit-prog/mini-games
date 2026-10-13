@@ -280,10 +280,7 @@ body.in-hub .top {
 .side-tab:active,
 .slot-kick,
 .slot-kick:hover,
-.slot-kick:active,
-.hub-chat button,
-.hub-chat button:hover,
-.hub-chat button:active {
+.slot-kick:active {
   transform: none;
   filter: none;
   box-shadow: none;
@@ -340,6 +337,38 @@ body.in-hub .top {
   border: 0;
   background: transparent;
   padding: 0;
+  box-shadow: none;
+}
+
+.hub-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 240px;
+  padding: 8px;
+  background: var(--card);
+  border: 3px solid var(--mark);
+  box-shadow: 0 8px 0 2px #000;
+  overflow: auto;
+}
+
+.hub-picker .emoji-tabs button {
+  background: var(--accent);
+  color: var(--text);
+  border: 2px solid var(--mark);
+}
+
+.hub-picker .emoji-tabs button.on {
+  background: var(--mark);
+  color: var(--bg);
+}
+
+.hub-emoji-btn {
+  width: 46px;
+  padding: 6px;
+  display: grid;
+  place-items: center;
+  flex: none;
 }
 
 .hub-line img.plain,
@@ -569,10 +598,10 @@ button.slot-plus:active {
   pointer-events: none;
 }
 
-.pick-card.out-up { animation: card-out-up 0.46s ease forwards; }
-.pick-card.in-bottom { animation: card-in-bottom 0.46s ease; }
-.pick-card.out-down { animation: card-out-down 0.46s ease forwards; }
-.pick-card.in-top { animation: card-in-top 0.46s ease; }
+.pick-card.out-up { animation: card-out-up 0.22s ease forwards; }
+.pick-card.in-bottom { animation: card-in-bottom 0.22s ease; }
+.pick-card.out-down { animation: card-out-down 0.22s ease forwards; }
+.pick-card.in-top { animation: card-in-top 0.22s ease; }
 
 @keyframes card-out-up {
   from { transform: translateY(0) scale(1); opacity: 1; }

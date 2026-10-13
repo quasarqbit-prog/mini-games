@@ -14,7 +14,8 @@
   let side = 'people';
   let kickIndex = null;
   let hubDraft = '';
-  let hubStickers = false;
+  let hubPicker = false;
+  let hubPickerTab = 'emoji';
   const notes = [];
 
   function tr(key, fallback) {
@@ -71,21 +72,29 @@
       if (msg.sticker && !msg.text) {
         return `<p class="hub-line sticker-only${msg.mine ? ' mine' : ''}">${who}<img class="${msg.stickerType === 'plain' ? 'plain' : ''}" alt="" src="${escapeHtml(msg.sticker)}"></p>`;
       }
-      return `<p class="hub-line${msg.mine ? ' mine' : ''}">${who}<span>${escapeHtml(msg.text || '')}</span></p>`;
+      return `<p class="hub-line${msg.mine ? ' mine' : ''}">${who}<span>${window.leisureEmojiText ? window.leisureEmojiText(msg.text || '') : escapeHtml(msg.text || '')}</span></p>`;
     }).join('');
     const saved = window.leisureStickers?.() || [];
-    const pick = hubStickers
-      ? `<div class="hub-stickers">${saved.length
-        ? saved.map((item, index) => `<button type="button" data-hub="hub-sticker" data-i="${index}"><img class="${item.type === 'plain' ? 'plain' : ''}" alt="${escapeHtml(item.name)}" src="${escapeHtml(item.src)}"></button>`).join('')
-        : `<span>${escapeHtml(tr('sticker.empty', 'Стикеров пока нет'))}</span>`}</div>`
-      : '';
+    const emojis = window.leisureEmojis || [];
+    const emojiGrid = `<div class="emoji-grid">${emojis.map((item) => `<button type="button" data-hub="hub-emoji" data-char="${item.char}"><span class="chat-emoji" style="--emoji-i:${item.index}"></span></button>`).join('')}</div>`;
+    const stickerGrid = saved.length
+      ? `<div class="hub-stickers">${saved.map((item, index) => `<button type="button" data-hub="hub-sticker" data-i="${index}"><img class="${item.type === 'plain' ? 'plain' : ''}" alt="${escapeHtml(item.name)}" src="${escapeHtml(item.src)}"></button>`).join('')}</div>`
+      : `<p class="hub-line empty">${escapeHtml(tr('sticker.empty', 'Стикеров пока нет'))}</p>`;
+    const pick = hubPicker ? `
+      <div class="hub-picker">
+        <div class="emoji-tabs">
+          <button type="button" class="${hubPickerTab === 'emoji' ? 'on' : ''}" data-hub="hub-tab" data-tab="emoji">${escapeHtml(tr('hub.emoji', 'Эмодзи'))}</button>
+          <button type="button" class="${hubPickerTab === 'stickers' ? 'on' : ''}" data-hub="hub-tab" data-tab="stickers">${escapeHtml(tr('tab.stickers', 'Стикеры'))}</button>
+        </div>
+        ${hubPickerTab === 'stickers' ? stickerGrid : emojiGrid}
+      </div>` : '';
     return `
       <div class="hub-log">${lines || `<p class="hub-line empty">${escapeHtml(tr('hub.chatEmpty', 'Сообщений пока нет'))}</p>`}</div>
       ${pick}
       <form class="hub-chat" data-hub-chat>
-        <button type="button" data-hub="hub-stickers" aria-label="Stickers">☺</button>
+        <button type="button" class="act hub-emoji-btn" data-hub="hub-stickers" aria-label="${escapeHtml(tr('tab.stickers', 'Стикеры'))}"><span class="chat-emoji" style="--emoji-i:0"></span></button>
         <input maxlength="400" value="${escapeHtml(hubDraft)}" placeholder="${escapeHtml(tr('hub.message', 'Сообщение'))}">
-        <button type="submit">${escapeHtml(tr('hub.send', 'Отправить'))}</button>
+        <button type="submit" class="act">${escapeHtml(tr('hub.send', 'Отправить'))}</button>
       </form>`;
   }
 
@@ -355,15 +364,32 @@
       return;
     }
     if (act === 'hub-stickers') {
-      hubStickers = !hubStickers;
+      hubPicker = !hubPicker;
       paint();
+      return;
+    }
+    if (act === 'hub-tab') {
+      hubPickerTab = el.dataset.tab === 'stickers' ? 'stickers' : 'emoji';
+      hubPicker = true;
+      paint();
+      return;
+    }
+    if (act === 'hub-emoji') {
+      hubDraft = `${hubDraft}${el.dataset.char || ''}`.slice(0, 400);
+      paint();
+      const field = last?.root?.querySelector('.hub-chat input');
+      if (field) {
+        field.focus();
+        const end = field.value.length;
+        try { field.setSelectionRange(end, end); } catch { /* the field can reject the caret */ }
+      }
       return;
     }
     if (act === 'hub-sticker') {
       const sticker = window.leisureStickers?.()[Number(el.dataset.i)];
       if (!sticker?.src) return;
       socket.emit('hub:chat', { sticker: sticker.src, stickerType: sticker.type });
-      hubStickers = false;
+      hubPicker = false;
       return;
     }
     if (act === 'kick') {

@@ -582,12 +582,12 @@ button {
 }
 
 .chat-form button {
-  border: 0;
-  border-radius: 12px;
-  background: var(--cream);
-  color: #24180f;
+  border: 3px solid var(--mark);
+  background: var(--accent);
+  color: var(--text);
   font-weight: 800;
   padding: 0 14px;
+  box-shadow: 0 8px 0 2px #000;
 }
 
 .chat-form .icon-btn {
@@ -596,9 +596,9 @@ button {
   flex: none;
   display: grid;
   place-items: center;
-  background: transparent;
-  color: var(--cream);
-  border: 1px solid var(--line);
+  background: var(--accent);
+  color: var(--text);
+  border: 3px solid var(--mark);
 }
 
 .chat-panel, .cinema-chat { position: relative; }
@@ -696,9 +696,9 @@ button {
   z-index: 4;
   display: flex;
   flex-direction: column;
-  background: #1c1714;
-  border: 1px solid var(--line);
-  border-radius: 16px;
+  background: var(--card);
+  border: 3px solid var(--mark);
+  box-shadow: 0 8px 0 2px #000;
   overflow: hidden;
 }
 
@@ -730,19 +730,38 @@ button {
 
 .emoji-cats button { flex: none; }
 
-.emoji-tabs button, .emoji-cats button, .sticker-pick button {
-  border: 1px solid var(--line);
-  background: transparent;
-  color: var(--cream);
-  border-radius: 10px;
+.emoji-tabs button, .emoji-cats button {
+  border: 2px solid var(--mark);
+  background: var(--accent);
+  color: var(--text);
   padding: 6px 8px;
   font-weight: 700;
 }
 
 .emoji-tabs button.on, .emoji-cats button.on {
-  background: var(--coral);
-  color: #2a120c;
-  border-color: transparent;
+  background: var(--mark);
+  color: var(--bg);
+  border-color: var(--mark);
+}
+
+.chat-emoji {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  margin: 0 1px;
+  vertical-align: -4px;
+  image-rendering: pixelated;
+  background-image: url("/assets/emoji.png");
+  background-repeat: no-repeat;
+  background-size: 260px 20px;
+  background-position: calc(var(--emoji-i, 0) * -20px) 0;
+}
+
+.emoji-grid button {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 2px;
 }
 
 .emoji-body { display: flex; flex-direction: column; min-height: 0; flex: 1; }
@@ -756,17 +775,10 @@ button {
 }
 .emoji-grid {
   display: grid;
-  grid-template-columns: repeat(8, 1fr);
+  grid-template-columns: repeat(7, 1fr);
   gap: 2px;
   overflow: auto;
   padding: 0 6px 8px;
-}
-.emoji-grid button {
-  border: 0;
-  background: transparent;
-  font-size: 22px;
-  line-height: 1.3;
-  padding: 2px;
 }
 .sticker-pick {
   display: grid;
@@ -774,6 +786,12 @@ button {
   gap: 8px;
   overflow: auto;
   padding: 8px;
+}
+.sticker-pick button {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
 }
 .sticker-pick img { width: 100%; height: 64px; object-fit: contain; }
 .sticker-box { margin-top: 14px; }
