@@ -2694,10 +2694,10 @@ body.in-game.in-mono > header.top { display: none; }
 }
 
 .wordle .key.absent {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: #9a938c;
+  border-color: #9a938c;
   box-shadow: none;
-  color: var(--text);
+  color: #1a1614;
 }
 
 .wordle .key.present {
