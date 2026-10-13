@@ -2650,7 +2650,7 @@ body.in-game.in-mono > header.top { display: none; }
 }
 
 .wordle .tile.correct {
-  background: linear-gradient(180deg, #2b844a 50%, #2b844a 50%);
+  background: linear-gradient(180deg, #49a66a 50%, #2b844a 50%);
   border-color: #000;
   color: var(--text);
   box-shadow: none;
@@ -2694,8 +2694,9 @@ body.in-game.in-mono > header.top { display: none; }
 }
 
 .wordle .key.absent {
-  background: linear-gradient(180deg, var(--card) 50%, var(--card) 50%);
-  border-color: #000;
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: none;
   color: var(--text);
 }
 
@@ -2706,7 +2707,7 @@ body.in-game.in-mono > header.top { display: none; }
 }
 
 .wordle .key.correct {
-  background: linear-gradient(180deg, #2b844a 50%, #2b844a 50%);
+  background: linear-gradient(180deg, #49a66a 50%, #2b844a 50%);
   border-color: #000;
   color: var(--text);
 }
