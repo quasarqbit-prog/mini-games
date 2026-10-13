@@ -538,6 +538,14 @@ button {
   background: rgba(255, 107, 74, 0.2);
 }
 
+.msg.sticker-only,
+.msg.sticker-only.mine {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+}
+
 .msg.system {
   align-self: center;
   background: transparent;
@@ -644,6 +652,34 @@ button {
   width: 132px;
   height: 132px;
   object-fit: contain;
+  background: transparent;
+}
+
+.sticker-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.sticker-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px;
+  border: 2px solid var(--mark);
+}
+
+.sticker-card img {
+  width: 96px;
+  height: 96px;
+  object-fit: contain;
+  background: transparent;
+}
+
+.sticker-card.plain img,
+.sticker-pick img.plain {
+  background: #fff;
 }
 
 .sticker-wrap { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }

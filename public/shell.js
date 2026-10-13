@@ -91,6 +91,25 @@
       'profile.saved': 'Профиль сохранён',
       'profile.close': 'Закрыть',
       'profile.clear': 'Убрать аватарку',
+      'tab.stickers': 'Стикеры',
+      'sticker.name': 'Название',
+      'sticker.clear': 'С прозрачным фоном',
+      'sticker.plain': 'Простой',
+      'sticker.image': 'Сменить картинку',
+      'sticker.delete': 'Удалить',
+      'sticker.empty': 'Стикеров пока нет',
+      'sticker.add': 'Добавить стикер',
+      'sticker.find': 'Поиск',
+      'hub.users': 'Пользователи',
+      'hub.chat': 'Чат',
+      'hub.chatEmpty': 'Сообщений пока нет',
+      'hub.message': 'Сообщение',
+      'hub.send': 'Отправить',
+      'hub.kick': 'Кик',
+      'hub.ban': 'Бан',
+      'hub.banHint': 'Бан: укажи время или сколько игр пройдёт',
+      'hub.minutes': 'Минуты',
+      'hub.games': 'Игр',
     },
     en: {
       'lang.label': 'Language',
@@ -166,6 +185,25 @@
       'profile.saved': 'Profile saved',
       'profile.close': 'Close',
       'profile.clear': 'Remove avatar',
+      'tab.stickers': 'Stickers',
+      'sticker.name': 'Name',
+      'sticker.clear': 'Transparent background',
+      'sticker.plain': 'Plain',
+      'sticker.image': 'Change picture',
+      'sticker.delete': 'Delete',
+      'sticker.empty': 'No stickers yet',
+      'sticker.add': 'Add sticker',
+      'sticker.find': 'Search',
+      'hub.users': 'Users',
+      'hub.chat': 'Chat',
+      'hub.chatEmpty': 'No messages yet',
+      'hub.message': 'Message',
+      'hub.send': 'Send',
+      'hub.kick': 'Kick',
+      'hub.ban': 'Ban',
+      'hub.banHint': 'Ban: set a time or how many games must pass',
+      'hub.minutes': 'Minutes',
+      'hub.games': 'Games',
     },
   };
 
@@ -241,7 +279,7 @@
     document.querySelectorAll('[data-i18n-placeholder]').forEach((node) => {
       node.placeholder = t(node.dataset.i18nPlaceholder);
     });
-    const code = document.getElementById('onboard-lang-code');
+    const code = document.getElementById('gate-lang-code');
     if (code) code.textContent = lang === 'en' ? 'eng' : 'ru';
     paintThemes();
     hooks?.rerender();
@@ -317,6 +355,7 @@
     const langBtn = document.getElementById('lang-btn');
     const themeBtn = document.getElementById('theme-btn');
     langBtn?.addEventListener('click', () => openLang(document.getElementById('lang-menu')?.hidden !== false));
+    document.getElementById('gate-lang')?.addEventListener('click', () => applyLang(lang === 'ru' ? 'en' : 'ru'));
     document.getElementById('lang-menu')?.addEventListener('click', (event) => {
       const choice = event.target.closest('[data-lang]');
       if (!choice) return;

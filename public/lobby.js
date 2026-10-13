@@ -1,9 +1,9 @@
 (function lobbyShell() {
   const ICONS = {
-    wordle: '/assets/wordle.png?v=2',
-    battle: '/assets/sea_war.png?v=2',
-    cinema: '/assets/cinema.png?v=2',
-    mono: '/assets/monopoly.png?v=2',
+    wordle: '/assets/wordle.png?v=3',
+    battle: '/assets/sea_war.png?v=3',
+    cinema: '/assets/cinema.png?v=3',
+    mono: '/assets/monopoly.png?v=3',
   };
   const GAMES = ['wordle', 'battle', 'cinema', 'mono'];
   let page = 0;
@@ -11,6 +11,10 @@
   let inviteUsed = false;
   let motion = null;
   let last = null;
+  let side = 'people';
+  let kickIndex = null;
+  let hubDraft = '';
+  let hubStickers = false;
   const notes = [];
 
   function tr(key, fallback) {
@@ -48,12 +52,57 @@
         </button>`;
     }
     const star = slot.host ? '<img class="slot-star" draggable="false" src="/assets/host.png" alt="">' : '';
+    const kick = last?.hub?.youHost && !slot.you
+      ? `<button type="button" class="slot-kick" data-hub="kick-open" data-index="${index}" aria-label="Kick">×</button>`
+      : '';
     const drag = last?.hub?.youHost ? 'draggable="true"' : '';
     return `
       <div class="slot" data-slot="${index}" ${drag}>
         <span class="slot-face">${face(slot, '•')}</span>
         <span class="slot-name">${escapeHtml(slot.name || slot.id || '—')}</span>
         ${star}
+        ${kick}
+      </div>`;
+  }
+
+  function chatBlock(hub) {
+    const lines = (hub.chat || []).map((msg) => {
+      const who = `<b>${escapeHtml(msg.name || '—')}</b>`;
+      if (msg.sticker && !msg.text) {
+        return `<p class="hub-line sticker-only${msg.mine ? ' mine' : ''}">${who}<img class="${msg.stickerType === 'plain' ? 'plain' : ''}" alt="" src="${escapeHtml(msg.sticker)}"></p>`;
+      }
+      return `<p class="hub-line${msg.mine ? ' mine' : ''}">${who}<span>${escapeHtml(msg.text || '')}</span></p>`;
+    }).join('');
+    const saved = window.leisureStickers?.() || [];
+    const pick = hubStickers
+      ? `<div class="hub-stickers">${saved.length
+        ? saved.map((item, index) => `<button type="button" data-hub="hub-sticker" data-i="${index}"><img class="${item.type === 'plain' ? 'plain' : ''}" alt="${escapeHtml(item.name)}" src="${escapeHtml(item.src)}"></button>`).join('')
+        : `<span>${escapeHtml(tr('sticker.empty', 'Стикеров пока нет'))}</span>`}</div>`
+      : '';
+    return `
+      <div class="hub-log">${lines || `<p class="hub-line empty">${escapeHtml(tr('hub.chatEmpty', 'Сообщений пока нет'))}</p>`}</div>
+      ${pick}
+      <form class="hub-chat" data-hub-chat>
+        <button type="button" data-hub="hub-stickers" aria-label="Stickers">☺</button>
+        <input maxlength="400" value="${escapeHtml(hubDraft)}" placeholder="${escapeHtml(tr('hub.message', 'Сообщение'))}">
+        <button type="submit">${escapeHtml(tr('hub.send', 'Отправить'))}</button>
+      </form>`;
+  }
+
+  function kickLayer(hub) {
+    if (kickIndex == null || !hub.youHost) return '';
+    const slot = hub.slots.filter((item) => !item.empty)[kickIndex];
+    if (!slot || slot.you) return '';
+    return `
+      <div class="invite-layer" data-hub="kick-close">
+        <div class="invite-sheet" data-hub="kick-hold">
+          <h3>${escapeHtml(slot.name || slot.id || '')}</h3>
+          <button type="button" class="act" data-hub="kick" data-index="${kickIndex}">${escapeHtml(tr('hub.kick', 'Кик'))}</button>
+          <p>${escapeHtml(tr('hub.banHint', 'Бан: укажи время или сколько игр пройдёт'))}</p>
+          <label class="mode-num">${escapeHtml(tr('hub.minutes', 'Минуты'))} <input data-ban="minutes" type="number" min="1" max="10080"></label>
+          <label class="mode-num">${escapeHtml(tr('hub.games', 'Игр'))} <input data-ban="games" type="number" min="1" max="99"></label>
+          <button type="button" class="act" data-hub="ban" data-index="${kickIndex}">${escapeHtml(tr('hub.ban', 'Бан'))}</button>
+        </div>
       </div>`;
   }
 
@@ -184,6 +233,7 @@
     const me = last.me || {};
     const enterClass = motion ? (motion.dir > 0 ? 'in-bottom' : 'in-top') : '';
     const leaveClass = motion ? (motion.dir > 0 ? 'out-up' : 'out-down') : '';
+    const keepChat = document.activeElement?.closest?.('.hub-chat input');
     last.root.innerHTML = `
       <section class="hub">
         <header class="hub-bar">
@@ -198,8 +248,12 @@
           </button>
         </header>
         <div class="hub-main">
-          <div class="hub-slots hub-frame">
-            ${slotsBlock(hub)}
+          <div class="hub-side hub-frame">
+            <div class="side-tabs">
+              <button type="button" class="side-tab${side === 'people' ? ' on' : ''}" data-hub="side" data-side="people">${escapeHtml(tr('hub.users', 'Пользователи'))}</button>
+              <button type="button" class="side-tab${side === 'chat' ? ' on' : ''}" data-hub="side" data-side="chat">${escapeHtml(tr('hub.chat', 'Чат'))}</button>
+            </div>
+            <div class="side-body">${side === 'chat' ? chatBlock(hub) : slotsBlock(hub)}</div>
           </div>
           ${hub.setup && hub.game ? `
             <div class="setup-wrap">
@@ -224,7 +278,16 @@
           </div>`}
         </div>
         ${inviteLayer(hub, last.online)}
+        ${kickLayer(hub)}
       </section>`;
+    const field = keepChat ? last.root.querySelector('.hub-chat input') : null;
+    if (field) {
+      field.focus();
+      const end = field.value.length;
+      try { field.setSelectionRange(end, end); } catch { /* the field can reject the caret */ }
+    }
+    const log = last.root.querySelector('.hub-log');
+    if (log) log.scrollTop = log.scrollHeight;
     if (motion) {
       const node = last.root.querySelector('.pick-card.in-bottom, .pick-card.in-top');
       node?.addEventListener('animationend', () => { motion = null; }, { once: true });
@@ -273,7 +336,53 @@
     }
     const socket = window.leisureSocket;
     if (!socket) return;
-    if (act === 'invite-hold') return;
+    if (act === 'invite-hold' || act === 'kick-hold') return;
+    if (act === 'kick-close') {
+      if (event.target !== el) return;
+      kickIndex = null;
+      paint();
+      return;
+    }
+    if (act === 'kick-open') {
+      event.preventDefault();
+      kickIndex = Number(el.dataset.index);
+      paint();
+      return;
+    }
+    if (act === 'side') {
+      side = el.dataset.side === 'chat' ? 'chat' : 'people';
+      paint();
+      return;
+    }
+    if (act === 'hub-stickers') {
+      hubStickers = !hubStickers;
+      paint();
+      return;
+    }
+    if (act === 'hub-sticker') {
+      const sticker = window.leisureStickers?.()[Number(el.dataset.i)];
+      if (!sticker?.src) return;
+      socket.emit('hub:chat', { sticker: sticker.src, stickerType: sticker.type });
+      hubStickers = false;
+      return;
+    }
+    if (act === 'kick') {
+      socket.emit('hub:kick', { index: Number(el.dataset.index) });
+      kickIndex = null;
+      paint();
+      return;
+    }
+    if (act === 'ban') {
+      const sheet = el.closest('.invite-sheet');
+      socket.emit('hub:ban', {
+        index: Number(el.dataset.index),
+        minutes: sheet?.querySelector('[data-ban="minutes"]')?.value,
+        games: sheet?.querySelector('[data-ban="games"]')?.value,
+      });
+      kickIndex = null;
+      paint();
+      return;
+    }
     if (act === 'invite-close' || act === 'invite-dismiss') {
       if (act === 'invite-close' && event.target !== el) return;
       inviteOpen = false;
@@ -357,6 +466,23 @@
     }
   });
 
+  document.addEventListener('input', (event) => {
+    const field = event.target.closest?.('.hub-chat input');
+    if (field) hubDraft = field.value;
+  });
+
+  document.addEventListener('submit', (event) => {
+    const form = event.target.closest?.('[data-hub-chat]');
+    const socket = window.leisureSocket;
+    if (!form || !socket || !last?.hub) return;
+    const field = form.querySelector('input');
+    const text = field?.value || '';
+    if (!text.trim()) return;
+    socket.emit('hub:chat', { text });
+    hubDraft = '';
+    if (field) field.value = '';
+  });
+
   document.addEventListener('change', (event) => {
     const input = event.target.closest('[data-hub-num]');
     const socket = window.leisureSocket;
@@ -382,7 +508,23 @@
     dragGhost.style.top = `${event.clientY - dragGhost.offsetHeight / 2}px`;
   }
 
+  document.addEventListener('pointerdown', (event) => {
+    const kick = event.target.closest?.('.slot-kick');
+    const slot = kick?.closest('[data-slot]');
+    if (!slot) return;
+    slot.draggable = false;
+    const restore = () => {
+      if (last?.hub?.youHost) slot.draggable = true;
+      window.removeEventListener('pointerup', restore);
+    };
+    window.addEventListener('pointerup', restore);
+  });
+
   document.addEventListener('dragstart', (event) => {
+    if (event.target.closest?.('.slot-kick')) {
+      event.preventDefault();
+      return;
+    }
     const slot = event.target.closest('[data-slot][draggable="true"]');
     if (!slot || !last?.hub?.youHost) return;
     dragFrom = slot.dataset.slot;

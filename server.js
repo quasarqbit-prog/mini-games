@@ -417,6 +417,7 @@ function pushChat(room, from, text, extra = {}) {
     reply: extra.reply || null,
     image: extra.image || '',
     sticker: extra.sticker || '',
+    stickerType: extra.stickerType === 'plain' ? 'plain' : 'clear',
   };
   if (room.game === 'mono') {
     const system = from === 'system';
@@ -495,6 +496,7 @@ function chatPayload(raw) {
     text,
     image,
     sticker,
+    stickerType: source.stickerType === 'plain' ? 'plain' : 'clear',
     reply: cleanReply(source.reply),
     badImage: Boolean(source.image) && !image,
     badSticker: Boolean(source.sticker) && !sticker,
@@ -585,9 +587,31 @@ function compactHub(hub) {
   hub.slots = hub.slots.filter(Boolean);
 }
 
+function activeBan(hub, token) {
+  const now = Date.now();
+  hub.bans = (hub.bans || []).filter((ban) => {
+    if (ban.until && ban.until > now) return true;
+    if (ban.untilRound && (hub.rounds || 0) < ban.untilRound) return true;
+    return false;
+  });
+  return hub.bans.some((ban) => ban.token === token);
+}
+
+function clearBan(hub, token) {
+  hub.bans = (hub.bans || []).filter((ban) => ban.token !== token);
+}
+
+function ejectHub(hub, token) {
+  const entry = presence.get(token);
+  pullFromHub(hub, token);
+  if (!entry) return;
+  for (const id of entry.sockets) io.sockets.sockets.get(id)?.emit('hub', null);
+}
+
 function enterHub(socket, hub) {
   compactHub(hub);
   if (hub.slots.includes(socket.data.token)) return socket.emit('hub', hubView(hub, socket.data.token));
+  if (activeBan(hub, socket.data.token)) return fail(socket, 'Вход закрыт, пока не закончится бан');
   if (hubByToken(socket.data.token)) return fail(socket, 'Сначала выйди из своего лобби');
   if (hub.slots.length >= HUB_SLOT_MAX) return fail(socket, 'В лобби нет свободных слотов');
   hub.slots.push(socket.data.token);
@@ -629,6 +653,14 @@ function hubView(hub, token) {
     page: Number.isInteger(hub.page) ? hub.page : 0,
     slide: Boolean(hub.slide),
     setup: Boolean(hub.setup),
+    chat: (hub.chat || []).slice(-40).map((msg) => ({
+      id: msg.id,
+      name: msg.name || '',
+      text: msg.text || '',
+      sticker: msg.sticker || '',
+      stickerType: msg.stickerType === 'plain' ? 'plain' : 'clear',
+      mine: msg.token === token,
+    })),
     youHost: hub.host === token,
     settings: sanitizeSettings(hub.settings),
     slots: hub.slots.map((slot) => (
@@ -1214,6 +1246,7 @@ function cinemaView(room, token) {
       reply: msg.reply || null,
       image: msg.image || '',
       sticker: msg.sticker || '',
+      stickerType: msg.stickerType === 'plain' ? 'plain' : 'clear',
     })),
   };
 }
@@ -1556,6 +1589,10 @@ io.on('connection', (socket) => {
       game: '',
       page: 0,
       setup: false,
+      chat: [],
+      chatSeq: 1,
+      bans: [],
+      rounds: 0,
       settings: defaultSettings(),
       slots: [socket.data.token],
     };
@@ -1641,6 +1678,60 @@ io.on('connection', (socket) => {
     const duo = hub.game === 'wordle' || hub.game === 'battle';
     if (duo && (!hub.slots[0] || !hub.slots[1])) return fail(socket, 'Нужны два игрока на игровых местах');
     if (!duo && hub.slots.filter(Boolean).length < 2) return fail(socket, 'Нужны хотя бы два человека');
+    hub.rounds = (hub.rounds || 0) + 1;
+  });
+
+  socket.on('hub:chat', (raw) => {
+    const hub = hubByToken(socket.data.token);
+    if (!hub) return fail(socket, 'Сначала войди в лобби');
+    const payload = chatPayload(raw);
+    if (payload.badSticker) return fail(socket, 'Стикер слишком большой или не подходит');
+    if (!payload.text && !payload.sticker) return;
+    if (!allowChat(hub, socket.data.token, socket)) return;
+    const entry = presence.get(socket.data.token);
+    const saved = profiles.get(socket.data.token);
+    if (!hub.chat) hub.chat = [];
+    hub.chat.push({
+      id: hub.chatSeq || 1,
+      token: socket.data.token,
+      name: entry?.name || saved?.name || 'Игрок',
+      text: payload.text,
+      sticker: payload.sticker,
+      stickerType: payload.stickerType,
+    });
+    hub.chatSeq = (hub.chatSeq || 1) + 1;
+    if (hub.chat.length > 40) hub.chat.splice(0, hub.chat.length - 40);
+    broadcastHub(hub);
+  });
+
+  socket.on('hub:kick', ({ index } = {}) => {
+    const hub = hubByToken(socket.data.token);
+    if (!hub || hub.host !== socket.data.token) return fail(socket, 'Кикает только хост');
+    compactHub(hub);
+    const slot = hub.slots[Number(index)];
+    if (!slot || slot === socket.data.token) return;
+    ejectHub(hub, slot);
+  });
+
+  socket.on('hub:ban', ({ index, minutes, games } = {}) => {
+    const hub = hubByToken(socket.data.token);
+    if (!hub || hub.host !== socket.data.token) return fail(socket, 'Банит только хост');
+    compactHub(hub);
+    const slot = hub.slots[Number(index)];
+    if (!slot || slot === socket.data.token) return;
+    const span = Math.round(Number(minutes));
+    const count = Math.round(Number(games));
+    const timed = Number.isInteger(span) && span > 0 && span <= 10080;
+    const played = Number.isInteger(count) && count > 0 && count <= 99;
+    if (!timed && !played) return fail(socket, 'Укажи время или количество игр');
+    if (!hub.bans) hub.bans = [];
+    clearBan(hub, slot);
+    hub.bans.push({
+      token: slot,
+      until: timed ? Date.now() + span * 60000 : 0,
+      untilRound: played ? (hub.rounds || 0) + count : 0,
+    });
+    ejectHub(hub, slot);
   });
 
   socket.on('hub:invite', ({ id } = {}) => {
@@ -1652,6 +1743,7 @@ io.on('connection', (socket) => {
     const entry = target ? presence.get(target) : null;
     if (!target || !entry?.sockets.size) return fail(socket, 'Этого человека сейчас нет на сайте');
     if (hub.slots.includes(target)) return fail(socket, 'Этот игрок уже в лобби');
+    clearBan(hub, target);
     const from = presence.get(socket.data.token);
     const saved = profiles.get(socket.data.token);
     const note = {
@@ -1672,8 +1764,7 @@ io.on('connection', (socket) => {
     if (hub.slots.length >= HUB_SLOT_MAX) return fail(socket, 'В лобби нет свободных слотов');
     const current = hubByToken(socket.data.token);
     if (current && current !== hub) pullFromHub(current, socket.data.token);
-    hub.slots.push(socket.data.token);
-    broadcastHub(hub);
+    enterHub(socket, hub);
   });
 
   socket.on('create', ({ game } = {}) => {

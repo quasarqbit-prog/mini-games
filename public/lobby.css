@@ -27,6 +27,36 @@ body.in-hub .top {
   margin: auto;
 }
 
+.gate-lang {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  box-shadow: none;
+}
+
+.gate-lang img {
+  width: 42px;
+  height: 42px;
+  object-fit: contain;
+  image-rendering: pixelated;
+}
+
+.gate-lang,
+.gate-lang:hover,
+.gate-lang:active {
+  transform: none;
+  filter: none;
+  box-shadow: none;
+}
+
 .gate {
   width: min(440px, 100%);
   display: flex;
@@ -218,11 +248,129 @@ body.in-hub .top {
   min-height: 0;
 }
 
-.hub-slots {
+.hub-side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.side-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.side-tab {
+  border: 2px solid var(--mark);
+  background: transparent;
+  color: var(--text);
+  padding: 10px;
+  box-shadow: none;
+}
+
+.side-tab.on {
+  background: var(--mark);
+  color: var(--bg);
+}
+
+.side-tab,
+.side-tab:hover,
+.side-tab:active,
+.slot-kick,
+.slot-kick:hover,
+.slot-kick:active,
+.hub-chat button,
+.hub-chat button:hover,
+.hub-chat button:active {
+  transform: none;
+  filter: none;
+  box-shadow: none;
+}
+
+.side-body {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-height: 0;
   overflow: auto;
+}
+
+.side-body:has(.hub-log) {
+  flex: 1;
+  overflow: hidden;
+}
+
+.hub-log {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.hub-line {
+  margin: 0;
+}
+
+.hub-line b {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.hub-line.sticker-only img,
+.hub-stickers img {
+  width: 112px;
+  height: 112px;
+  object-fit: contain;
+  background: transparent;
+  border: 0;
+}
+
+.hub-stickers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.hub-stickers button {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.hub-line img.plain,
+.hub-stickers img.plain,
+.sticker-card.plain img,
+.chat-sticker img.plain,
+.sticker-pick img.plain {
+  background: #fff;
+}
+
+.hub-chat {
+  display: flex;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.hub-chat input {
+  flex: 1;
+  min-width: 0;
+}
+
+.slot-kick {
+  width: 36px;
+  height: 36px;
+  flex: none;
+  margin-left: 8px;
+  border: 2px solid var(--mark);
+  background: transparent;
+  color: var(--text);
+  font-size: 22px;
+  line-height: 1;
 }
 
 .slot {

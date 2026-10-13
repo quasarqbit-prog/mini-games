@@ -23,11 +23,23 @@ localStorage.setItem(TOKEN_KEY, token);
 const PROFILE_KEY = 'mg-profile';
 const STICKER_KEY = 'leisure-stickers';
 
+function stickerOf(item) {
+  if (typeof item === 'string' && /^data:image\/(png|jpeg|webp|gif);base64,/i.test(item)) {
+    return { src: item, name: '', type: 'clear' };
+  }
+  if (!item || !/^data:image\/(png|jpeg|webp|gif);base64,/i.test(item.src || '')) return null;
+  return {
+    src: item.src,
+    name: String(item.name || '').slice(0, 24),
+    type: item.type === 'plain' ? 'plain' : 'clear',
+  };
+}
+
 function loadStickers() {
   try {
     const data = JSON.parse(localStorage.getItem(STICKER_KEY) || '[]');
     if (!Array.isArray(data)) return [];
-    return data.filter((item) => /^data:image\/(png|jpeg|webp|gif);base64,/i.test(item)).slice(-30);
+    return data.map(stickerOf).filter(Boolean).slice(-30);
   } catch {
     return [];
   }
@@ -53,6 +65,7 @@ function loadProfile() {
 
 const socket = io({ auth: { token } });
 window.leisureSocket = socket;
+window.leisureStickers = () => stickers;
 
 let connected = false;
 let booting = true;
@@ -82,6 +95,7 @@ let profileTab = 'profile';
 let profileDraft = null;
 let publicUserId = '';
 let stickers = loadStickers();
+let stickerFind = '';
 let replyDraft = null;
 let emojiOpen = false;
 let pickerTab = 'emoji';
@@ -323,7 +337,8 @@ function renderModal() {
         <button type="button" class="pixel-btn" data-act="shell-lang" data-lang="ru">ru</button>
         <button type="button" class="pixel-btn" data-act="shell-lang" data-lang="en">eng</button>
       </div>`;
-  } else {
+  } else if (profileTab === 'stickers') body = stickerTabHtml();
+  else {
     body = `
       <label class="avatar-pick">
         ${preview}
@@ -337,23 +352,9 @@ function renderModal() {
         </label>
         <div class="lobby-actions">
           <button class="btn" type="submit">${escapeHtml(tr('profile.save', 'Сохранить'))}</button>
-          <button class="btn ghost" type="button" data-act="close-profile">${escapeHtml(tr('profile.close', 'Закрыть'))}</button>
         </div>
       </form>
-      ${profileDraft.avatar ? `<button class="btn ghost wide" type="button" data-act="clear-avatar">${escapeHtml(tr('profile.clear', 'Убрать аватарку'))}</button>` : ''}
-      <div class="sticker-box">
-        <h3>Стикеры</h3>
-        <div class="sticker-grid">
-          ${stickers.map((src, index) => `
-            <span>
-              <img src="${escapeHtml(src)}" alt="">
-              <button type="button" data-act="sticker-delete" data-i="${index}" aria-label="Удалить стикер">×</button>
-            </span>`).join('')}
-        </div>
-        <label class="btn ghost wide">Добавить стикер
-          <input class="sticker-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
-        </label>
-      </div>`;
+      ${profileDraft.avatar ? `<button class="btn ghost wide" type="button" data-act="clear-avatar">${escapeHtml(tr('profile.clear', 'Убрать аватарку'))}</button>` : ''}`;
   }
   if (pop) pop.hidden = false;
   panel.className = 'account-panel';
@@ -361,6 +362,7 @@ function renderModal() {
     <div class="account-tabs">
       ${accountTab('profile', tr('tab.profile', 'Профиль'))}
       ${accountTab('theme', tr('tab.theme', 'Темы'))}
+      ${accountTab('stickers', tr('tab.stickers', 'Стикеры'))}
       ${accountTab('settings', tr('tab.settings', 'Настройки'))}
     </div>
     ${body}`;
@@ -430,6 +432,28 @@ async function resizeSticker(file) {
   return data;
 }
 
+function knockWhite(src) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = image.naturalWidth || image.width || 1;
+      canvas.height = image.naturalHeight || image.height || 1;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(image, 0, 0);
+      const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const px = frame.data;
+      for (let i = 0; i < px.length; i += 4) {
+        if (px[i] > 245 && px[i + 1] > 245 && px[i + 2] > 245) px[i + 3] = 0;
+      }
+      ctx.putImageData(frame, 0, 0);
+      resolve(canvas.toDataURL('image/png'));
+    };
+    image.onerror = () => reject(new Error('sticker'));
+    image.src = src;
+  });
+}
+
 function isSystemMessage(msg) {
   return Boolean(msg.system || msg.from === 'system');
 }
@@ -454,9 +478,10 @@ function messageBody(msg) {
   if (msg.image) parts.push(`<img class="chat-photo" alt="Фото" src="${escapeHtml(msg.image)}">`);
   if (msg.sticker) {
     const open = stickerMenuId === String(msg.id);
-    const owned = stickers.includes(msg.sticker);
+    const owned = stickers.some((item) => item.src === msg.sticker);
+    const plate = msg.stickerType === 'plain' ? ' plain' : '';
     parts.push(`<span class="sticker-wrap">
-      <button type="button" class="chat-sticker" data-act="sticker-menu" data-id="${escapeHtml(String(msg.id))}"><img alt="Стикер" src="${escapeHtml(msg.sticker)}"></button>
+      <button type="button" class="chat-sticker" data-act="sticker-menu" data-id="${escapeHtml(String(msg.id))}"><img class="${plate}" alt="Стикер" src="${escapeHtml(msg.sticker)}"></button>
       ${open ? (owned
         ? '<span class="sticker-owned">Уже в стикерах</span>'
         : `<button type="button" class="btn ghost" data-act="sticker-save" data-id="${escapeHtml(String(msg.id))}">В стикеры</button>`) : ''}
@@ -472,7 +497,33 @@ function messageHtml(msg) {
   const head = cinema
     ? `${escapeHtml(who)} · ${chatStamp(msg.at)}`
     : `${avatarHtml(state?.[msg.from] || { name: who }, who)}${escapeHtml(who)}`;
-  return `<div class="msg${messageMine(msg) ? ' mine' : ''}" data-id="${escapeHtml(String(msg.id))}"><b${cinema ? '' : ' class="person"'}>${head}</b>${messageBody(msg)}</div>`;
+  const stickerOnly = Boolean(msg.sticker) && !msg.text && !msg.image;
+  return `<div class="msg${stickerOnly ? ' sticker-only' : ''}${messageMine(msg) ? ' mine' : ''}" data-id="${escapeHtml(String(msg.id))}"><b${cinema ? '' : ' class="person"'}>${head}</b>${messageBody(msg)}</div>`;
+}
+
+function stickerTabHtml() {
+  const cards = stickers.map((sticker, index) => `
+    <article class="sticker-card${sticker.type === 'plain' ? ' plain' : ''}">
+      <img src="${escapeHtml(sticker.src)}" alt="">
+      <input data-sticker-name="${index}" maxlength="24" placeholder="${escapeHtml(tr('sticker.name', 'Название'))}" value="${escapeHtml(sticker.name)}">
+      <div class="mode-row">
+        <button type="button" class="mode-opt${sticker.type === 'clear' ? ' on' : ''}" data-act="sticker-kind" data-kind="clear" data-i="${index}">${escapeHtml(tr('sticker.clear', 'С прозрачным фоном'))}</button>
+        <button type="button" class="mode-opt${sticker.type === 'plain' ? ' on' : ''}" data-act="sticker-kind" data-kind="plain" data-i="${index}">${escapeHtml(tr('sticker.plain', 'Простой'))}</button>
+      </div>
+      <div class="lobby-actions">
+        <label class="btn ghost">${escapeHtml(tr('sticker.image', 'Сменить картинку'))}
+          <input class="sticker-replace" data-i="${index}" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+        </label>
+        <button type="button" class="btn ghost" data-act="sticker-delete" data-i="${index}">${escapeHtml(tr('sticker.delete', 'Удалить'))}</button>
+      </div>
+    </article>`).join('');
+  return `
+    <div class="sticker-editor">
+      ${cards || `<p>${escapeHtml(tr('sticker.empty', 'Стикеров пока нет'))}</p>`}
+      <label class="btn">${escapeHtml(tr('sticker.add', 'Добавить стикер'))}
+        <input class="sticker-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+      </label>
+    </div>`;
 }
 
 function chatComposer() {
@@ -1698,6 +1749,21 @@ document.addEventListener('click', (event) => {
     renderModal();
     paintPicker();
   }
+  if (act === 'sticker-kind') {
+    const item = stickers[Number(el.dataset.i)];
+    if (!item) return;
+    const kind = el.dataset.kind === 'plain' ? 'plain' : 'clear';
+    const applyKind = async () => {
+      if (kind === 'clear') {
+        try { item.src = await knockWhite(item.src); } catch { /* keep the picture */ }
+      }
+      item.type = kind;
+      saveStickers();
+      renderModal();
+      paintPicker();
+    };
+    applyKind();
+  }
 });
 
 document.addEventListener('submit', (event) => {
@@ -1747,6 +1813,18 @@ document.addEventListener('submit', (event) => {
 });
 
 document.addEventListener('input', (event) => {
+  const named = event.target.closest?.('[data-sticker-name]');
+  if (named) {
+    const item = stickers[Number(named.dataset.stickerName)];
+    if (item) {
+      item.name = named.value.slice(0, 24);
+      saveStickers();
+    }
+  }
+  if (event.target?.classList?.contains('sticker-search')) {
+    stickerFind = event.target.value.slice(0, 24);
+    paintPicker();
+  }
   const target = event.target;
   if (target?.classList?.contains('cinema-url')) cinemaUrlDraft = target.value;
   if (target?.classList?.contains('dm-input')) dmDraft = target.value;
@@ -1804,6 +1882,25 @@ document.addEventListener('change', async (event) => {
     }
     return;
   }
+  const stickerReplace = event.target.closest?.('.sticker-replace');
+  if (stickerReplace?.files?.[0]) {
+    const item = stickers[Number(stickerReplace.dataset.i)];
+    try {
+      const data = await resizeSticker(stickerReplace.files[0]);
+      if (!item || !/^data:image\/(png|jpeg|webp|gif);base64,/i.test(data) || data.length > 100000) {
+        toast('Стикер слишком большой');
+      } else {
+        item.src = item.type === 'clear' ? await knockWhite(data) : data;
+        saveStickers();
+        renderModal();
+        paintPicker();
+      }
+    } catch {
+      toast('Не удалось прочитать стикер');
+    }
+    stickerReplace.value = '';
+    return;
+  }
   const stickerInput = event.target.closest?.('.sticker-file');
   if (stickerInput?.files?.[0]) {
     try {
@@ -1811,7 +1908,7 @@ document.addEventListener('change', async (event) => {
       if (!/^data:image\/(png|jpeg|webp|gif);base64,/i.test(data) || data.length > 100000) {
         toast('Стикер слишком большой');
       } else {
-        stickers.push(data);
+        stickers.push({ src: await knockWhite(data), name: '', type: 'clear' });
         saveStickers();
         renderModal();
         paintPicker();
@@ -2279,6 +2376,7 @@ function sendChat(extra) {
     text: extra?.text || '',
     image: extra?.image || '',
     sticker: extra?.sticker || '',
+    stickerType: extra?.stickerType === 'plain' ? 'plain' : 'clear',
     reply: replyDraft,
   });
   replyDraft = null;
@@ -2291,16 +2389,18 @@ function sendChat(extra) {
 }
 
 function sendSticker(index) {
-  const src = stickers[index];
-  if (!src) return;
-  sendChat({ sticker: src });
+  const sticker = stickers[index];
+  if (!sticker?.src) return;
+  const payload = { sticker: sticker.src, stickerType: sticker.type };
+  if (state) sendChat(payload);
+  else window.leisureSocket?.emit('hub:chat', payload);
 }
 
 function saveChatSticker(id) {
   const msg = (state?.chat || []).find((item) => String(item.id) === String(id));
   if (!msg?.sticker) return;
-  if (!stickers.includes(msg.sticker)) {
-    stickers.push(msg.sticker);
+  if (!stickers.some((item) => item.src === msg.sticker)) {
+    stickers.push({ src: msg.sticker, name: '', type: msg.stickerType === 'plain' ? 'plain' : 'clear' });
     saveStickers();
     toast('Стикер добавлен');
   }
@@ -2362,9 +2462,21 @@ function paintPicker() {
   const body = pop.querySelector('.emoji-body');
   if (!body) return;
   if (pickerTab === 'stickers') {
-    body.innerHTML = stickers.length
-      ? `<div class="sticker-pick">${stickers.map((src, index) => `<button type="button" data-act="sticker-send" data-i="${index}"><img alt="" src="${escapeHtml(src)}"></button>`).join('')}</div>`
-      : '<p class="note">Стикеров пока нет. Добавь их в профиле.</p>';
+    const query = stickerFind.trim().toLowerCase();
+    const shown = stickers
+      .map((item, index) => ({ item, index }))
+      .filter(({ item }) => !query || item.name.toLowerCase().includes(query));
+    const grid = shown.length
+      ? `<div class="sticker-pick">${shown.map(({ item, index }) => `<button type="button" data-act="sticker-send" data-i="${index}"><img class="${item.type === 'plain' ? 'plain' : ''}" alt="${escapeHtml(item.name)}" src="${escapeHtml(item.src)}"></button>`).join('')}</div>`
+      : '<p class="note">Стикеров пока нет. Добавь их в разделе стикеров.</p>';
+    const keep = document.activeElement?.classList?.contains('sticker-search');
+    body.innerHTML = `<input class="sticker-search" maxlength="24" placeholder="${escapeHtml(tr('sticker.find', 'Поиск'))}" value="${escapeHtml(stickerFind)}">${grid}`;
+    if (keep) {
+      const field = body.querySelector('.sticker-search');
+      field?.focus();
+      const end = field?.value.length || 0;
+      field?.setSelectionRange(end, end);
+    }
     return;
   }
   body.innerHTML = `<div class="emoji-grid">${QUICK_EMOJI.map((char) => `<button type="button" data-act="emoji-insert">${char}</button>`).join('')}</div>`;
