@@ -381,13 +381,40 @@ body.in-hub .top {
 
 .hub-chat {
   display: flex;
+  flex-direction: column;
   gap: 8px;
   margin-top: auto;
 }
 
-.hub-chat input {
+.chat-actions {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.chat-actions .act,
+.chat-actions button[type="submit"] {
   flex: 1;
+}
+
+.hub-chat .hub-emoji-btn {
+  flex: none;
+}
+
+.chat-field {
+  width: 100%;
   min-width: 0;
+  resize: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+  line-height: 1.35;
+  box-sizing: border-box;
+}
+
+.chat-field::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .slot-kick {
@@ -544,13 +571,65 @@ button.slot-plus:active {
   box-shadow: none;
 }
 
+.pane-stage { display: contents; }
+
+.view-clip {
+  overflow: hidden;
+  min-width: 0;
+  min-height: 0;
+}
+
+.game-clip {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+
+.hub-side > .view-clip {
+  flex: 1;
+}
+
+.view-track {
+  display: flex;
+  width: 200%;
+  height: 100%;
+  min-height: 0;
+  transition: transform 0.34s ease;
+}
+
+.game-clip > .view-track,
+.hub-side > .view-clip > .view-track {
+  flex: 1;
+}
+
+.view-track[data-view="chat"],
+.view-track[data-view="setup"] {
+  transform: translateX(-50%);
+}
+
+.view-pane {
+  width: 50%;
+  flex: 0 0 50%;
+  min-width: 0;
+  height: 100%;
+  box-sizing: border-box;
+  overflow: auto;
+  scrollbar-width: none;
+}
+
+.view-pane::-webkit-scrollbar { width: 0; height: 0; }
+
+.game-clip .view-pane { padding: 16px; }
+
 .hub-pick {
   display: grid;
   grid-template-columns: minmax(220px, 460px) auto;
   gap: 22px;
   align-items: center;
   justify-content: center;
-  overflow: auto;
+  overflow: visible;
+  height: 100%;
+  box-sizing: border-box;
 }
 
 .setup-wrap {
@@ -910,25 +989,57 @@ button.slot-plus:active {
     gap: 12px;
     overflow: hidden;
   }
-  .side-tabs { display: none; }
-  .hub.pane-game .hub-side,
-  .hub.pane-people .hub-pick,
-  .hub.pane-people .setup-wrap,
-  .hub.pane-chat .hub-pick,
-  .hub.pane-chat .setup-wrap { display: none; }
-  .hub-side,
-  .setup-wrap,
-  .hub-pick { min-height: 0; flex: 1; }
-  .setup-wrap {
-    width: 100%;
-    height: auto;
+  .pane-stage {
+    display: block;
+    position: relative;
+    flex: 1;
     min-height: 0;
-    align-self: stretch;
+    overflow: hidden;
   }
+  .pane-stage > .hub-side,
+  .pane-stage > .game-clip {
+    position: absolute;
+    inset: 0;
+    width: auto;
+    height: auto;
+    transition: transform 0.34s ease;
+  }
+  .hub.pane-game .pane-stage > .hub-side { transform: translateX(-100%); }
+  .hub.pane-game .pane-stage > .game-clip { transform: translateX(0); }
+  .hub:not(.pane-game) .pane-stage > .hub-side { transform: translateX(0); }
+  .hub:not(.pane-game) .pane-stage > .game-clip { transform: translateX(100%); }
+  .hub[data-pane-from="people"].pane-game .pane-stage > .hub-side,
+  .hub[data-pane-from="chat"].pane-game .pane-stage > .hub-side {
+    transform: translateX(0);
+    transition: none;
+  }
+  .hub[data-pane-from="people"].pane-game .pane-stage > .game-clip,
+  .hub[data-pane-from="chat"].pane-game .pane-stage > .game-clip {
+    transform: translateX(100%);
+    transition: none;
+  }
+  .hub[data-pane-from="game"]:not(.pane-game) .pane-stage > .hub-side {
+    transform: translateX(-100%);
+    transition: none;
+  }
+  .hub[data-pane-from="game"]:not(.pane-game) .pane-stage > .game-clip {
+    transform: translateX(0);
+    transition: none;
+  }
+  .side-tabs { display: none; }
+  .hub-side,
+  .game-clip,
+  .hub-pick { min-height: 0; }
   .hub-pick {
     grid-template-columns: 1fr;
     align-content: start;
-    overflow: auto;
+    height: auto;
   }
   .gems { flex-direction: row; flex-wrap: wrap; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .view-track,
+  .pane-stage > .hub-side,
+  .pane-stage > .game-clip { transition: none; }
 }

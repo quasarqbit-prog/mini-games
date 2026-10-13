@@ -244,11 +244,26 @@ function captureForm() {
         : null;
 }
 
+function growChatField(field) {
+  if (!field) return;
+  const style = getComputedStyle(field);
+  const line = parseFloat(style.lineHeight) || 22;
+  const pad = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
+  const border = (parseFloat(style.borderTopWidth) || 0) + (parseFloat(style.borderBottomWidth) || 0);
+  const max = line * 3 + pad + border;
+  field.style.height = 'auto';
+  field.style.height = `${Math.min(Math.max(field.scrollHeight, line + pad + border), max)}px`;
+}
+window.growChatField = growChatField;
+
 function restoreForm() {
   const chat = document.querySelector('.chat-input');
   const setup = document.querySelector('.setup-input');
   const log = document.querySelector('.chat-log');
-  if (chat) chat.value = chatDraft;
+  if (chat) {
+    chat.value = chatDraft;
+    growChatField(chat);
+  }
   if (setup) setup.value = setupDraft;
   const direct = document.querySelector('.dm-input');
   if (direct) direct.value = dmDraft;
@@ -550,13 +565,15 @@ function chatComposer() {
       <div class="emoji-body"></div>
     </div>
     <form class="chat-form" data-act="send-chat">
-      <button class="icon-btn" type="button" data-act="emoji-open" aria-label="Стикеры"><span class="chat-emoji" style="--emoji-i:0"></span></button>
-      <button class="icon-btn" type="button" data-act="photo-open" aria-label="Прикрепить фото" title="Прикрепить фото">
-        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M21 6h-3.2l-1.2-2H7.4L6.2 6H3a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h18a1 1 0 0 0 1-1V7a1 1 0 0 0-1-1zm-9 11a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z"/></svg>
-      </button>
+      <textarea class="chat-input chat-field" maxlength="400" rows="1" placeholder="Сообщение" autocomplete="off"></textarea>
+      <div class="chat-actions">
+        <button class="icon-btn" type="button" data-act="emoji-open" aria-label="Стикеры"><span class="chat-emoji" style="--emoji-i:0"></span></button>
+        <button class="icon-btn" type="button" data-act="photo-open" aria-label="Прикрепить фото" title="Прикрепить фото">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M21 6h-3.2l-1.2-2H7.4L6.2 6H3a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h18a1 1 0 0 0 1-1V7a1 1 0 0 0-1-1zm-9 11a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z"/></svg>
+        </button>
+        <button type="submit">Отправить</button>
+      </div>
       <input class="photo-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
-      <input class="chat-input" maxlength="400" placeholder="Сообщение" autocomplete="off">
-      <button type="submit">Отправить</button>
     </form>`;
 }
 
@@ -1782,7 +1799,7 @@ document.addEventListener('submit', (event) => {
     return;
   }
   if (act === 'send-chat') {
-    const input = form.querySelector('input.chat-input');
+    const input = form.querySelector('.chat-input');
     sendChat({ text: input.value });
     return;
   }
@@ -1932,7 +1949,18 @@ document.addEventListener('change', async (event) => {
   }
 });
 
+document.addEventListener('input', (event) => {
+  const field = event.target.closest?.('.chat-field');
+  if (field && !field.closest('.hub-chat')) growChatField(field);
+});
+
 document.addEventListener('keydown', (event) => {
+  const writing = event.target.closest?.('.chat-field');
+  if (writing && event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+    event.preventDefault();
+    writing.form?.requestSubmit();
+    return;
+  }
   if (event.key === 'F2') {
     if (!isLocalAdmin()) return;
     event.preventDefault();
@@ -2382,7 +2410,10 @@ function sendChat(extra) {
   chatDraft = '';
   emojiOpen = false;
   const input = document.querySelector('.chat-input');
-  if (input) input.value = '';
+  if (input) {
+    input.value = '';
+    growChatField(input);
+  }
   paintReply();
   paintPicker();
 }

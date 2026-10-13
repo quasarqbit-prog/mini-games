@@ -471,8 +471,10 @@ window.MonopolyUI = (() => {
       <section class="chat-panel mono-chat">
         <div class="chat-log">${lines || '<div class="msg system">Сообщений пока нет</div>'}</div>
         <form class="chat-form" data-act="send-chat">
-          <input class="chat-input" maxlength="400" placeholder="Сообщение" autocomplete="off">
-          <button type="submit">Отправить</button>
+          <textarea class="chat-input chat-field" maxlength="400" rows="1" placeholder="Сообщение" autocomplete="off"></textarea>
+          <div class="chat-actions">
+            <button type="submit">Отправить</button>
+          </div>
         </form>
       </section>`;
   }

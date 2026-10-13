@@ -566,20 +566,36 @@ button {
 
 .chat-form {
   display: flex;
+  flex-direction: column;
   gap: 8px;
   padding: 10px;
   border-top: 1px solid var(--line);
 }
 
-.chat-form input {
-  flex: 1;
+.chat-form .chat-actions {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.chat-form .chat-actions button[type="submit"] { flex: 1; }
+
+.chat-form .chat-field {
+  width: 100%;
   min-width: 0;
-  border-radius: 12px;
-  border: 1px solid var(--line);
-  background: #1a1511;
+  resize: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+  line-height: 1.35;
+  border: 3px solid var(--mark);
+  background: var(--bg);
   padding: 10px 12px;
   outline: none;
+  box-sizing: border-box;
 }
+
+.chat-form .chat-field::-webkit-scrollbar { width: 0; height: 0; }
 
 .chat-form button {
   border: 3px solid var(--mark);

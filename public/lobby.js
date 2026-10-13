@@ -17,6 +17,9 @@
   let countSkew = 0;
   let countClock = 0;
   let countHeard = '';
+  let shownSetup = null;
+  let shownSide = null;
+  let shownPane = null;
   const countClips = {
     second: new Audio('/assets/second.mp3'),
     start: new Audio('/assets/start.mp3'),
@@ -147,9 +150,11 @@
       <div class="hub-log">${lines || `<p class="hub-line empty">${escapeHtml(tr('hub.chatEmpty', 'Сообщений пока нет'))}</p>`}</div>
       ${pick}
       <form class="hub-chat" data-hub-chat>
-        <button type="button" class="act hub-emoji-btn" data-hub="hub-stickers" aria-label="${escapeHtml(tr('tab.stickers', 'Стикеры'))}"><span class="chat-emoji" style="--emoji-i:0"></span></button>
-        <input maxlength="400" value="${escapeHtml(hubDraft)}" placeholder="${escapeHtml(tr('hub.message', 'Сообщение'))}">
-        <button type="submit" class="act">${escapeHtml(tr('hub.send', 'Отправить'))}</button>
+        <textarea class="chat-field" maxlength="400" rows="1" placeholder="${escapeHtml(tr('hub.message', 'Сообщение'))}">${escapeHtml(hubDraft)}</textarea>
+        <div class="chat-actions">
+          <button type="button" class="act hub-emoji-btn" data-hub="hub-stickers" aria-label="${escapeHtml(tr('tab.stickers', 'Стикеры'))}"><span class="chat-emoji" style="--emoji-i:0"></span></button>
+          <button type="submit" class="act">${escapeHtml(tr('hub.send', 'Отправить'))}</button>
+        </div>
       </form>`;
   }
 
@@ -290,6 +295,28 @@
       </div>`;
   }
 
+  function armSlides() {
+    const root = last?.root;
+    if (!root) return;
+    root.querySelectorAll('.view-track[data-from]').forEach((track) => {
+      const from = track.dataset.from;
+      const start = from === 'people' || from === 'pick' ? 'translateX(0)' : 'translateX(-50%)';
+      const end = track.dataset.view === 'chat' || track.dataset.view === 'setup' ? 'translateX(-50%)' : 'translateX(0)';
+      track.style.transition = 'none';
+      track.style.transform = start;
+      void track.offsetWidth;
+      track.style.transition = 'transform 0.34s ease';
+      track.style.transform = end;
+      track.removeAttribute('data-from');
+    });
+    const shell = root.querySelector('.hub[data-pane-from]');
+    if (shell) {
+      void shell.offsetWidth;
+      shell.removeAttribute('data-pane-from');
+    }
+    root.querySelectorAll('.chat-field').forEach((field) => window.growChatField?.(field));
+  }
+
   function paint() {
     if (!last?.root) return;
     const hub = last.hub;
@@ -297,11 +324,17 @@
     const me = last.me || {};
     const enterClass = motion ? (motion.dir > 0 ? 'in-bottom' : 'in-top') : '';
     const leaveClass = motion ? (motion.dir > 0 ? 'out-up' : 'out-down') : '';
-    const keepChat = document.activeElement?.closest?.('.hub-chat input');
-    const column = portrait() ? pane : side;
+    const keepChat = document.activeElement?.closest?.('.hub-chat textarea');
+    const nextSetup = Boolean(hub.setup && hub.game);
+    const setupFrom = shownSetup == null || shownSetup === nextSetup ? '' : (shownSetup ? 'setup' : 'pick');
+    const sideFrom = shownSide == null || shownSide === side ? '' : shownSide;
+    const paneFrom = shownPane == null || shownPane === pane || !portrait() ? '' : shownPane;
+    shownSetup = nextSetup;
+    shownSide = side;
+    shownPane = pane;
     if (hub.countdown) countSkew = hub.countdown.serverNow - Date.now();
     last.root.innerHTML = `
-      <section class="hub pane-${pane}">
+      <section class="hub pane-${pane}"${paneFrom ? ` data-pane-from="${paneFrom}"` : ''}>
         <header class="hub-bar">
           <button type="button" class="act hub-leave" data-hub="leave" aria-label="${escapeHtml(tr('hub.leave', 'Выйти'))}">
             <span class="leave-word">${escapeHtml(tr('hub.leave', 'Выйти'))}</span>
@@ -322,34 +355,46 @@
             <button type="button" class="side-tab${pane === 'chat' ? ' on' : ''}" data-hub="pane" data-pane="chat">${escapeHtml(tr('hub.chat', 'Чат'))}</button>
             <button type="button" class="side-tab${pane === 'game' ? ' on' : ''}" data-hub="pane" data-pane="game">${escapeHtml(tr('hub.play', 'Игра'))}</button>
           </div>
+          <div class="pane-stage">
           <div class="hub-side hub-frame">
             <div class="side-tabs">
               <button type="button" class="side-tab${side === 'people' ? ' on' : ''}" data-hub="side" data-side="people">${escapeHtml(tr('hub.users', 'Пользователи'))}</button>
               <button type="button" class="side-tab${side === 'chat' ? ' on' : ''}" data-hub="side" data-side="chat">${escapeHtml(tr('hub.chat', 'Чат'))}</button>
             </div>
-            <div class="side-body">${column === 'chat' ? chatBlock(hub) : slotsBlock(hub)}</div>
-          </div>
-          ${hub.setup && hub.game ? `
-            <div class="setup-wrap">
-              <div class="hub-pick hub-frame is-setup"><div class="mode-setup">${modeHtml(hub)}</div></div>
-            </div>` : `
-          <div class="hub-pick hub-frame">
-            <div class="pick-col">
-              <button type="button" class="act" data-hub="page" data-dir="-1" aria-label="Previous"${hub.youHost ? '' : ' disabled'}>↑</button>
-              <div class="pick-stage">
-                ${motion ? `<article class="pick-card fly ${leaveClass}">${cardHtml(GAMES[motion.from], hub)}</article>` : ''}
-                <article class="pick-card ${enterClass}">${cardHtml(game, hub)}</article>
+            <div class="view-clip">
+              <div class="view-track" data-view="${side === 'chat' ? 'chat' : 'people'}"${sideFrom ? ` data-from="${sideFrom}"` : ''}>
+                <div class="view-pane side-body">${slotsBlock(hub)}</div>
+                <div class="view-pane side-body">${chatBlock(hub)}</div>
               </div>
-              <button type="button" class="act" data-hub="page" data-dir="1" aria-label="Next"${hub.youHost ? '' : ' disabled'}>↓</button>
             </div>
-            <div class="gems">
-              ${GAMES.map((id, index) => `
-                <button type="button" class="gem-btn${index === page ? ' on' : ''}" data-hub="jump" data-index="${index}"${hub.youHost ? '' : ' disabled'}>
-                  <i class="gem${index === page ? ' on' : ''}"></i>
-                  <span>${escapeHtml(gameTitle(id))}</span>
-                </button>`).join('')}
+          </div>
+          <div class="game-clip hub-frame view-clip">
+            <div class="view-track" data-view="${nextSetup ? 'setup' : 'pick'}"${setupFrom ? ` data-from="${setupFrom}"` : ''}>
+              <div class="view-pane">
+                <div class="hub-pick">
+                  <div class="pick-col">
+                    <button type="button" class="act" data-hub="page" data-dir="-1" aria-label="Previous"${hub.youHost ? '' : ' disabled'}>↑</button>
+                    <div class="pick-stage">
+                      ${motion ? `<article class="pick-card fly ${leaveClass}">${cardHtml(GAMES[motion.from], hub)}</article>` : ''}
+                      <article class="pick-card ${enterClass}">${cardHtml(game, hub)}</article>
+                    </div>
+                    <button type="button" class="act" data-hub="page" data-dir="1" aria-label="Next"${hub.youHost ? '' : ' disabled'}>↓</button>
+                  </div>
+                  <div class="gems">
+                    ${GAMES.map((id, index) => `
+                      <button type="button" class="gem-btn${index === page ? ' on' : ''}" data-hub="jump" data-index="${index}"${hub.youHost ? '' : ' disabled'}>
+                        <i class="gem${index === page ? ' on' : ''}"></i>
+                        <span>${escapeHtml(gameTitle(id))}</span>
+                      </button>`).join('')}
+                  </div>
+                </div>
+              </div>
+              <div class="view-pane">
+                <div class="mode-setup">${modeHtml(hub)}</div>
+              </div>
             </div>
-          </div>`}
+          </div>
+          </div>
         </div>
         ${inviteLayer(hub, last.online)}
         ${kickLayer(hub)}
@@ -368,12 +413,13 @@
     } else {
       countHeard = '';
     }
-    const field = keepChat ? last.root.querySelector('.hub-chat input') : null;
+    const field = keepChat ? last.root.querySelector('.hub-chat textarea') : null;
     if (field) {
       field.focus();
       const end = field.value.length;
       try { field.setSelectionRange(end, end); } catch { /* the field can reject the caret */ }
     }
+    armSlides();
     const log = last.root.querySelector('.hub-log');
     if (log) log.scrollTop = log.scrollHeight;
     if (motion) {
@@ -465,7 +511,7 @@
     if (act === 'hub-emoji') {
       hubDraft = `${hubDraft}${el.dataset.char || ''}`.slice(0, 400);
       paint();
-      const field = last?.root?.querySelector('.hub-chat input');
+      const field = last?.root?.querySelector('.hub-chat textarea');
       if (field) {
         field.focus();
         const end = field.value.length;
@@ -583,20 +629,26 @@
   window.matchMedia('(max-width: 800px) and (orientation: portrait)').addEventListener('change', () => paint());
 
   document.addEventListener('input', (event) => {
-    const field = event.target.closest?.('.hub-chat input');
-    if (field) hubDraft = field.value;
+    const field = event.target.closest?.('.hub-chat textarea');
+    if (field) {
+      hubDraft = field.value;
+      window.growChatField?.(field);
+    }
   });
 
   document.addEventListener('submit', (event) => {
     const form = event.target.closest?.('[data-hub-chat]');
     const socket = window.leisureSocket;
     if (!form || !socket || !last?.hub) return;
-    const field = form.querySelector('input');
+    const field = form.querySelector('textarea');
     const text = field?.value || '';
     if (!text.trim()) return;
     socket.emit('hub:chat', { text });
     hubDraft = '';
-    if (field) field.value = '';
+    if (field) {
+      field.value = '';
+      window.growChatField?.(field);
+    }
   });
 
   document.addEventListener('change', (event) => {
