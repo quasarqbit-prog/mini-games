@@ -879,7 +879,7 @@ function boardHtml(role) {
     const tiles = [...row.guess].map((ch, i) => (
       `<span class="tile ${row.marks[i]}">${escapeHtml(ch)}</span>`
     )).join('');
-    return `<div class="row${fresh}" style="grid-template-columns: repeat(${length}, minmax(0, 1fr))">${tiles}</div>`;
+    return `<div class="row${fresh}" style="--n:${length}">${tiles}</div>`;
   });
 
   const mine = state.you === role;
@@ -891,11 +891,11 @@ function boardHtml(role) {
     while (chars.length < length) chars.push('');
     const tiles = chars.map((ch) => `<span class="tile${ch ? ' filled' : ''}">${escapeHtml(ch)}</span>`).join('');
     const kind = canType ? ' is-draft' : ' is-live';
-    rows.push(`<div class="row${kind}" style="grid-template-columns: repeat(${length}, minmax(0, 1fr))">${tiles}</div>`);
+    rows.push(`<div class="row${kind}" style="--n:${length}">${tiles}</div>`);
   }
 
   const legend = mine
-    ? '<p class="legend">Зелёная — буква на своём месте. Жёлтая — буква есть в слове. Серая — такой буквы нет.</p>'
+    ? '<p class="legend">Зелёная — буква на своём месте. Оранжевая — буква есть в слове. Цвет карточки — такой буквы нет.</p>'
     : '';
   return `<div class="board-wrap">${rows.join('')}${legend}</div>`;
 }
@@ -905,17 +905,15 @@ function keyboardHtml() {
   const rows = script === 'en' ? EN_ROWS : RU_ROWS;
   const ranks = keyRanks(state.boards[state.you]);
   const locked = state.phase !== 'play' || state.turn !== state.you;
-  const keys = rows.map((row, index) => {
+  const keys = rows.map((row) => {
     const buttons = [...row].map((ch) => {
       const mark = ranks[ch] ? ` ${ranks[ch]}` : '';
       return `<button type="button" class="key${mark}" data-act="key" data-key="${ch}">${ch}</button>`;
     }).join('');
-    const side = index === rows.length - 1
-      ? `<button type="button" class="key wide" data-act="backspace">Стереть</button>${buttons}<button type="button" class="key wide" data-act="submit-guess">Ввод</button>`
-      : buttons;
-    return `<div class="keyboard-row">${side}</div>`;
+    return `<div class="keyboard-row">${buttons}</div>`;
   }).join('');
-  return `<div class="keyboard${locked ? ' is-locked' : ''}">${keys}</div>`;
+  const actions = `<div class="keyboard-row keys-wide"><button type="button" class="key wide" data-act="backspace">Стереть</button><button type="button" class="key wide" data-act="submit-guess">Ввод</button></div>`;
+  return `<div class="keyboard${locked ? ' is-locked' : ''}">${keys}${actions}</div>`;
 }
 
 function columnHtml(role) {
@@ -999,7 +997,7 @@ function gameHtml() {
     : '';
 
   return `
-    <section class="game-screen">
+    <section class="game-screen wordle">
       <div class="mobile-tabs">
         <button type="button" class="${mobilePane === 'mine' ? 'on' : ''}" data-act="pane" data-pane="mine">Свой вордл</button>
         <button type="button" class="${mobilePane === 'theirs' ? 'on' : ''}" data-act="pane" data-pane="theirs">Вордл второго игрока</button>
@@ -1008,12 +1006,12 @@ function gameHtml() {
       ${chatNote}
       ${given}
       <div class="game-top">
-        <div></div>
+        <div class="top-actions"><button class="btn" type="button" data-act="leave">Выйти</button></div>
         <div class="turn-wrap">
           <div class="turn${turnClass}">${turnText}</div>
           ${clock}
         </div>
-        <div class="top-actions"><button class="btn ghost" type="button" data-act="leave">Выйти</button></div>
+        <div></div>
       </div>
       <div class="game-grid" data-pane="${mobilePane}">
         ${columnHtml('host')}
@@ -1314,12 +1312,12 @@ function resultHtml() {
       <p>${escapeHtml(displayName('guest'))} загадал <strong>${escapeHtml(String(state.answers.host || '').toUpperCase())}</strong></p>
     </div>`;
   return `
-    <section class="result-screen">
+    <section class="result-screen${state.game === 'wordle' ? ' wordle-result' : ''}">
       <h2>${escapeHtml(title)}</h2>
       ${words}
       <div class="lobby-actions">
         <button class="btn" type="button" data-act="again">Лобби</button>
-        <button class="btn ghost" type="button" data-act="leave">Выйти</button>
+        <button class="btn${state.game === 'wordle' ? '' : ' ghost'}" type="button" data-act="leave">Выйти</button>
       </div>
     </section>`;
 }
