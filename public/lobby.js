@@ -16,6 +16,13 @@
   let kickIndex = null;
   let countSkew = 0;
   let countClock = 0;
+  let countHeard = '';
+  const countClips = {
+    second: new Audio('/assets/second.mp3'),
+    start: new Audio('/assets/start.mp3'),
+  };
+  countClips.second.preload = 'auto';
+  countClips.start.preload = 'auto';
   let hubDraft = '';
   let hubPicker = false;
   let hubPickerTab = 'emoji';
@@ -53,6 +60,27 @@
   function countLeft(countdown) {
     if (!countdown) return 0;
     return Math.max(0, Math.ceil((countdown.endsAt - (Date.now() + countSkew)) / 1000));
+  }
+
+  function playCount(name) {
+    const clip = countClips[name];
+    if (!clip) return;
+    clip.currentTime = 0;
+    const pending = clip.play();
+    if (pending) pending.catch(() => {});
+  }
+
+  function syncCountSound(countdown) {
+    if (!countdown) {
+      countHeard = '';
+      return;
+    }
+    const left = countLeft(countdown);
+    if (left < 1) return;
+    const mark = `${countdown.endsAt}:${left}`;
+    if (mark === countHeard) return;
+    countHeard = mark;
+    playCount(left === 1 ? 'start' : 'second');
   }
 
   function countLayer(hub) {
@@ -329,11 +357,16 @@
       </section>`;
     clearInterval(countClock);
     if (hub.countdown) {
+      syncCountSound(hub.countdown);
       countClock = setInterval(() => {
         const node = last?.root?.querySelector('.count-num');
         if (!node || !last?.hub?.countdown) return;
-        node.textContent = String(countLeft(last.hub.countdown));
+        const left = countLeft(last.hub.countdown);
+        node.textContent = String(left);
+        syncCountSound(last.hub.countdown);
       }, 200);
+    } else {
+      countHeard = '';
     }
     const field = keepChat ? last.root.querySelector('.hub-chat input') : null;
     if (field) {
