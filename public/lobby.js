@@ -12,7 +12,10 @@
   let motion = null;
   let last = null;
   let side = 'people';
+  let pane = 'game';
   let kickIndex = null;
+  let countSkew = 0;
+  let countClock = 0;
   let hubDraft = '';
   let hubPicker = false;
   let hubPickerTab = 'emoji';
@@ -41,6 +44,30 @@
 
   function duoGame(id) {
     return id === 'wordle' || id === 'battle';
+  }
+
+  function portrait() {
+    return window.matchMedia('(max-width: 800px) and (orientation: portrait)').matches;
+  }
+
+  function countLeft(countdown) {
+    if (!countdown) return 0;
+    return Math.max(0, Math.ceil((countdown.endsAt - (Date.now() + countSkew)) / 1000));
+  }
+
+  function countLayer(hub) {
+    if (!hub.countdown) return '';
+    const people = (hub.countdown.cancels || []).map((person) => `
+      <span class="count-person">
+        <span class="slot-face">${face(person, person.name)}</span>
+        <b>${escapeHtml(person.name || person.id || '')}</b>
+      </span>`).join('');
+    return `
+      <div class="count-layer">
+        <b class="count-num">${countLeft(hub.countdown)}</b>
+        <button type="button" class="act" data-hub="count-cancel">${escapeHtml(tr('hub.abort', 'Отмена'))}</button>
+        <div class="count-who">${people}</div>
+      </div>`;
   }
 
   function slotHtml(slot, index, watch) {
@@ -243,10 +270,15 @@
     const enterClass = motion ? (motion.dir > 0 ? 'in-bottom' : 'in-top') : '';
     const leaveClass = motion ? (motion.dir > 0 ? 'out-up' : 'out-down') : '';
     const keepChat = document.activeElement?.closest?.('.hub-chat input');
+    const column = portrait() ? pane : side;
+    if (hub.countdown) countSkew = hub.countdown.serverNow - Date.now();
     last.root.innerHTML = `
-      <section class="hub">
+      <section class="hub pane-${pane}">
         <header class="hub-bar">
-          <button type="button" class="act" data-hub="leave">${escapeHtml(tr('hub.leave', 'Выйти'))}</button>
+          <button type="button" class="act hub-leave" data-hub="leave" aria-label="${escapeHtml(tr('hub.leave', 'Выйти'))}">
+            <span class="leave-word">${escapeHtml(tr('hub.leave', 'Выйти'))}</span>
+            <span class="leave-x" aria-hidden="true">×</span>
+          </button>
           <div class="hub-brand"><b>LEISURE</b><button type="button" class="hub-code" data-hub="copy-link">${escapeHtml(hub.code)}</button></div>
           <button type="button" class="hub-you" data-hub="profile">
             <div>
@@ -257,12 +289,17 @@
           </button>
         </header>
         <div class="hub-main">
+          <div class="pane-tabs">
+            <button type="button" class="side-tab${pane === 'people' ? ' on' : ''}" data-hub="pane" data-pane="people">${escapeHtml(tr('hub.users', 'Пользователи'))}</button>
+            <button type="button" class="side-tab${pane === 'chat' ? ' on' : ''}" data-hub="pane" data-pane="chat">${escapeHtml(tr('hub.chat', 'Чат'))}</button>
+            <button type="button" class="side-tab${pane === 'game' ? ' on' : ''}" data-hub="pane" data-pane="game">${escapeHtml(tr('hub.play', 'Игра'))}</button>
+          </div>
           <div class="hub-side hub-frame">
             <div class="side-tabs">
               <button type="button" class="side-tab${side === 'people' ? ' on' : ''}" data-hub="side" data-side="people">${escapeHtml(tr('hub.users', 'Пользователи'))}</button>
               <button type="button" class="side-tab${side === 'chat' ? ' on' : ''}" data-hub="side" data-side="chat">${escapeHtml(tr('hub.chat', 'Чат'))}</button>
             </div>
-            <div class="side-body">${side === 'chat' ? chatBlock(hub) : slotsBlock(hub)}</div>
+            <div class="side-body">${column === 'chat' ? chatBlock(hub) : slotsBlock(hub)}</div>
           </div>
           ${hub.setup && hub.game ? `
             <div class="setup-wrap">
@@ -288,7 +325,16 @@
         </div>
         ${inviteLayer(hub, last.online)}
         ${kickLayer(hub)}
+        ${countLayer(hub)}
       </section>`;
+    clearInterval(countClock);
+    if (hub.countdown) {
+      countClock = setInterval(() => {
+        const node = last?.root?.querySelector('.count-num');
+        if (!node || !last?.hub?.countdown) return;
+        node.textContent = String(countLeft(last.hub.countdown));
+      }, 200);
+    }
     const field = keepChat ? last.root.querySelector('.hub-chat input') : null;
     if (field) {
       field.focus();
@@ -361,6 +407,15 @@
     if (act === 'side') {
       side = el.dataset.side === 'chat' ? 'chat' : 'people';
       paint();
+      return;
+    }
+    if (act === 'pane') {
+      pane = el.dataset.pane === 'chat' ? 'chat' : el.dataset.pane === 'game' ? 'game' : 'people';
+      paint();
+      return;
+    }
+    if (act === 'count-cancel') {
+      socket.emit('hub:cancel');
       return;
     }
     if (act === 'hub-stickers') {
@@ -491,6 +546,8 @@
       paintNotes();
     }
   });
+
+  window.matchMedia('(max-width: 800px) and (orientation: portrait)').addEventListener('change', () => paint());
 
   document.addEventListener('input', (event) => {
     const field = event.target.closest?.('.hub-chat input');

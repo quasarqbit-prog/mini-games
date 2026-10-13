@@ -601,6 +601,156 @@ function clearBan(hub, token) {
   hub.bans = (hub.bans || []).filter((ban) => ban.token !== token);
 }
 
+function tokenSockets(token) {
+  const entry = presence.get(token);
+  if (!entry) return [];
+  return [...entry.sockets].map((id) => io.sockets.sockets.get(id)).filter(Boolean);
+}
+
+function clearCountdown(hub) {
+  if (hub.countdown?.timer) clearTimeout(hub.countdown.timer);
+  hub.countdown = null;
+}
+
+function hubReady(hub) {
+  if (!hub.game) return false;
+  const duo = hub.game === 'wordle' || hub.game === 'battle';
+  if (duo) return Boolean(hub.slots[0] && hub.slots[1]);
+  return hub.slots.filter(Boolean).length >= 2;
+}
+
+function armCountdown(hub) {
+  if (hub.countdown?.timer) clearTimeout(hub.countdown.timer);
+  const wait = Math.max(0, hub.countdown.endsAt - Date.now());
+  hub.countdown.timer = setTimeout(() => finishCountdown(hub), wait);
+}
+
+function finishCountdown(hub) {
+  if (!hubs.has(hub.code) || !hub.countdown) return;
+  if (!hubReady(hub)) {
+    clearCountdown(hub);
+    broadcastHub(hub);
+    return;
+  }
+  launchHub(hub);
+}
+
+function bindSeat(room, role, token) {
+  room[role].connected = false;
+  for (const socket of tokenSockets(token)) {
+    room[role].socketId = socket.id;
+    room[role].connected = true;
+    socket.join(room.code);
+  }
+}
+
+function dropLaunched(hub, tokens) {
+  clearCountdown(hub);
+  hub.slots = hub.slots.filter((slot) => slot && !tokens.includes(slot));
+  if (!hub.slots.includes(hub.host)) hub.host = hub.slots[0] || '';
+  if (!hub.slots.length) hubs.delete(hub.code);
+  else broadcastHub(hub);
+  for (const token of tokens) {
+    for (const socket of tokenSockets(token)) socket.emit('hub', null);
+  }
+}
+
+function launchHub(hub) {
+  const duo = hub.game === 'wordle' || hub.game === 'battle';
+  const seated = duo ? hub.slots.slice(0, 2) : hub.slots.slice(0, hub.game === 'mono' ? 6 : hub.slots.length);
+  if (seated.length < 2) {
+    clearCountdown(hub);
+    broadcastHub(hub);
+    return;
+  }
+  if (hub.game === 'wordle') {
+    const room = emptyRoom(makeCode());
+    room.settings = sanitizeSettings(hub.settings);
+    room.host = { token: seated[0], connected: false, socketId: '' };
+    room.guest = { token: seated[1], connected: false, socketId: '' };
+    applyProfile(room.host);
+    applyProfile(room.guest);
+    rooms.set(room.code, room);
+    bindSeat(room, 'host', seated[0]);
+    bindSeat(room, 'guest', seated[1]);
+    room.phase = 'setup';
+    rollFirst(room);
+    pushChat(room, 'system', rulesText(room));
+    broadcast(room);
+  } else if (hub.game === 'battle') {
+    const room = emptyBattle(makeCode());
+    room.settings = battleSettings(hub.settings);
+    room.host = { token: seated[0], connected: false, socketId: '' };
+    room.guest = { token: seated[1], connected: false, socketId: '' };
+    applyProfile(room.host);
+    applyProfile(room.guest);
+    rooms.set(room.code, room);
+    bindSeat(room, 'host', seated[0]);
+    bindSeat(room, 'guest', seated[1]);
+    startBattle(room);
+  } else if (hub.game === 'cinema') {
+    const room = emptyCinema(makeCode());
+    rooms.set(room.code, room);
+    seated.forEach((token, index) => {
+      const member = {
+        token,
+        id: crypto.randomBytes(4).toString('hex'),
+        socketId: '',
+        name: '',
+        avatar: '',
+        host: index === 0,
+        connected: false,
+        joinedAt: Date.now(),
+        disconnectedAt: 0,
+      };
+      applyProfile(member);
+      room.members.push(member);
+      if (index === 0) room.hostToken = token;
+      for (const socket of tokenSockets(token)) {
+        member.socketId = socket.id;
+        member.connected = true;
+        socket.join(room.code);
+      }
+    });
+    pushChat(room, 'system', `${cinemaName(room.members[0])} открыл кинотеатр.`);
+    broadcast(room);
+  } else if (hub.game === 'mono') {
+    const room = mono.emptyMono(makeCode());
+    rooms.set(room.code, room);
+    for (const token of seated) {
+      const sockets = tokenSockets(token);
+      const problem = mono.addPlayer(room, token, sockets[0]?.id || '');
+      if (problem) {
+        rooms.delete(room.code);
+        clearCountdown(hub);
+        broadcastHub(hub);
+        return;
+      }
+      applyProfile(room.players[room.players.length - 1]);
+      for (const socket of sockets) {
+        room.players[room.players.length - 1].socketId = socket.id;
+        room.players[room.players.length - 1].connected = true;
+        socket.join(room.code);
+      }
+    }
+    const problem = mono.start(room);
+    if (problem) {
+      rooms.delete(room.code);
+      clearCountdown(hub);
+      broadcastHub(hub);
+      return;
+    }
+    pushChat(room, 'system', 'Партия монополии началась.');
+    broadcast(room);
+  } else {
+    clearCountdown(hub);
+    broadcastHub(hub);
+    return;
+  }
+  hub.rounds = (hub.rounds || 0) + 1;
+  dropLaunched(hub, seated);
+}
+
 function ejectHub(hub, token) {
   const entry = presence.get(token);
   pullFromHub(hub, token);
@@ -662,6 +812,11 @@ function hubView(hub, token) {
       mine: msg.token === token,
     })),
     youHost: hub.host === token,
+    countdown: hub.countdown ? {
+      endsAt: hub.countdown.endsAt,
+      serverNow: Date.now(),
+      cancels: (hub.countdown.cancels || []).map((slot) => hubMember(slot)),
+    } : null,
     settings: sanitizeSettings(hub.settings),
     slots: hub.slots.map((slot) => (
       slot
@@ -1678,7 +1833,30 @@ io.on('connection', (socket) => {
     const duo = hub.game === 'wordle' || hub.game === 'battle';
     if (duo && (!hub.slots[0] || !hub.slots[1])) return fail(socket, 'Нужны два игрока на игровых местах');
     if (!duo && hub.slots.filter(Boolean).length < 2) return fail(socket, 'Нужны хотя бы два человека');
-    hub.rounds = (hub.rounds || 0) + 1;
+    if (hub.countdown) return;
+    hub.countdown = { endsAt: Date.now() + 5000, cancels: [] };
+    armCountdown(hub);
+    broadcastHub(hub);
+  });
+
+  socket.on('hub:cancel', () => {
+    const hub = hubByToken(socket.data.token);
+    if (!hub?.countdown) return;
+    if (hub.host === socket.data.token) {
+      clearCountdown(hub);
+      broadcastHub(hub);
+      return;
+    }
+    if (!hub.countdown.cancels.includes(socket.data.token)) hub.countdown.cancels.push(socket.data.token);
+    const voters = hub.slots.filter((slot) => slot && slot !== hub.host);
+    if (hub.countdown.cancels.length * 2 >= voters.length) {
+      clearCountdown(hub);
+      broadcastHub(hub);
+      return;
+    }
+    hub.countdown.endsAt = Date.now() + 5000;
+    armCountdown(hub);
+    broadcastHub(hub);
   });
 
   socket.on('hub:chat', (raw) => {

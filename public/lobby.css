@@ -828,11 +828,107 @@ button.slot-plus:active {
 
 .hub-note .act { flex: 1; }
 
-@media (max-width: 800px) {
-  .hub { padding: 12px; }
+.leave-x { display: none; }
+
+.pane-tabs { display: none; }
+
+.count-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  grid-template-rows: 1fr auto auto;
+  justify-items: center;
+  align-items: center;
+  padding: 28px 16px 36px;
+  background: rgba(0, 0, 0, 0.72);
+}
+
+.count-num {
+  font-size: 96px;
+  line-height: 1;
+}
+
+.count-who {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  min-height: 52px;
+}
+
+.count-person {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.count-person .slot-face {
+  width: 42px;
+  height: 42px;
+}
+
+@media (max-width: 800px) and (orientation: portrait) {
+  .hub { padding: 8px; }
   .hub-bar { grid-template-columns: auto 1fr auto; }
   .hub-brand b { font-size: 16px; letter-spacing: 0.12em; }
-  .hub-main { grid-template-columns: 1fr; overflow: auto; scrollbar-width: none; }
-  .hub-main::-webkit-scrollbar { width: 0; height: 0; }
-  .hub-pick { justify-content: stretch; }
+  .leave-word { display: none; }
+  .leave-x { display: block; font-size: 28px; line-height: 1; }
+  .hub-leave {
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+  }
+  .hub-avatar { order: -1; }
+  .hub-you div { text-align: left; }
+  .hub-you b,
+  .hub-you small {
+    display: block;
+    max-width: 96px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pane-tabs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .pane-tabs .side-tab {
+    min-width: 0;
+    padding: 10px 2px;
+    font-size: 8px;
+    line-height: 1.2;
+    letter-spacing: 0;
+    overflow: hidden;
+  }
+  .hub-main {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow: hidden;
+  }
+  .side-tabs { display: none; }
+  .hub.pane-game .hub-side,
+  .hub.pane-people .hub-pick,
+  .hub.pane-people .setup-wrap,
+  .hub.pane-chat .hub-pick,
+  .hub.pane-chat .setup-wrap { display: none; }
+  .hub-side,
+  .setup-wrap,
+  .hub-pick { min-height: 0; flex: 1; }
+  .setup-wrap {
+    width: 100%;
+    height: auto;
+    min-height: 0;
+    align-self: stretch;
+  }
+  .hub-pick {
+    grid-template-columns: 1fr;
+    align-content: start;
+    overflow: auto;
+  }
+  .gems { flex-direction: row; flex-wrap: wrap; }
 }
